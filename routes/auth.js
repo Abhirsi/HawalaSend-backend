@@ -5,6 +5,8 @@ const { registerUser, loginUser } = require('../controllers/authController');
 const authenticateToken = require('../middleware/authMiddleware');
 const pool = require('../pool');
 const router = express.Router();
+const authController = require('../controllers/authController');
+
 
 // Rate limiting for auth endpoints (prevent brute force)
 const authLimiter = rateLimit({
