@@ -1,4 +1,4 @@
-// backend/controllers/authController.js
+// backend/Controllers/authController.js
 //const { validateEmail } = require('../utils/validators');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
