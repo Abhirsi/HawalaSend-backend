@@ -11,12 +11,15 @@ const errorHandler = require('./middleware/errorHandler');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+app.set('trust proxy', 1);
+
+
 // =======================
 // Security Middleware
 // =======================
 app.use(helmet()); // Security headers (XSS, HSTS, etc.)
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: process.env.FRONTEND_URL || 'https://react-money-app-ten.vercel.app/login',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE']
 }));
