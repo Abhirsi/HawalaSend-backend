@@ -8,10 +8,6 @@ const { validateEmail, validatePassword } = require('../utils/validators');
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 
-// Simple email validation function
-function isEmailValid(email) {
-  return email.includes('@') && email.includes('.');
-}
 
 // Constants
 const SALT_ROUNDS = 12;
@@ -177,11 +173,6 @@ exports.loginUser = async (req, res) => {
       return res.status(401).json(errorResponse);
     }
 
-    function validateEmail(email) {
-  const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return re.test(email);
-}
-
     // Generate JWT
     const token = jwt.sign(
       { 
@@ -194,6 +185,17 @@ exports.loginUser = async (req, res) => {
         algorithm: 'HS256' 
       }
     );
+
+    //Logout route
+    router.post('/logout', (req, res) => {
+      res.clearCookie('token', {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+      });
+      res.json({ message: 'Logged out successfully' });
+    });
+    
 
     // Set secure HTTP-only cookie
     res.cookie('token', token, {
