@@ -3,13 +3,19 @@ const { body, query, param, validationResult } = require('express-validator');
 const { BadRequestError } = require('../errors');
 const logger = require('./logger');
 
-// utils/validators.js
-exports.validateEmail = (email) => {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+// utils/validators.js should have:
+const validateEmail = (email) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
 };
 
-exports.validatePassword = (password) => {
-  return password.length >= 8;
+const validatePassword = (password) => {
+  return password && password.length >= 8;
+};
+
+module.exports = {
+  validateEmail,
+  validatePassword
 };
 
 //SWWSWQ;
