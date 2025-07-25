@@ -45,7 +45,7 @@ exports.registerUser = async (req, res) => {
       });
     }
 
-    if (!validateEmail(trimmedEmail)) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
       return res.status(400).json({ 
         error: 'Invalid email format',
         code: 'INVALID_EMAIL'
