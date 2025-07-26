@@ -1,7 +1,6 @@
 // backend/pool.js
 require('dotenv').config({ path: '.env.local' });
 const { Pool } = require('pg');
-const { pool, testConnection } = require('./pool');
 
 let pool;
 
