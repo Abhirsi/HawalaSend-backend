@@ -4,8 +4,7 @@ const sanitizeHtml = require('sanitize-html');
 const { BadRequestError } = require('../errors');
 const logger = require('./logger');
 
-<<<<<<< HEAD
-=======
+
 // utils/validators.js should have:
 const validateEmail = (email) => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -19,20 +18,6 @@ const validatePassword = (password) => {
 module.exports = {
   validateEmail,
   validatePassword
-};
-
-//SWWSWQ;
->>>>>>> 2f7a1654cf4d92d16f7d23c258d88da1dc3367da
-/**
- * Basic validation utilities
- */
-const validateEmail = (email) => {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
-};
-
-const validatePassword = (password) => {
-  return password && password.length >= 8;
 };
 
 /**
@@ -342,11 +327,6 @@ module.exports = {
   // Re-export express-validator functions for convenience
   body,
   query,
-<<<<<<< HEAD
   param,
   validationResult
 };
-=======
-  param
-};
->>>>>>> 2f7a1654cf4d92d16f7d23c258d88da1dc3367da
