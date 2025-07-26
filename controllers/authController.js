@@ -47,7 +47,7 @@ exports.registerUser = async (req, res) => {
       });
     }
 
-    if (!validateEmail(trimmedEmail)) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
       return res.status(400).json({ 
         error: 'Invalid email format',
         code: 'INVALID_EMAIL'
@@ -259,6 +259,7 @@ exports.loginUser = async (req, res) => {
     });
   }
 };
+<<<<<<< HEAD
 
 // ✅ Logout user
 exports.logoutUser = (req, res) => {
@@ -321,3 +322,5 @@ exports.getCurrentUser = async (req, res) => {
     });
   }
 };
+=======
+>>>>>>> 2f7a1654cf4d92d16f7d23c258d88da1dc3367da
