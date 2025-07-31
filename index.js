@@ -12,10 +12,10 @@ const errorHandler = require('./middleware/errorHandler');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Trust proxy for Railway
+// Trust proxy for Railway deployment
 app.set('trust proxy', 1);
 
-// CORS Configuration
+// CORS Configuration - FIXED
 const allowedOrigins = process.env.FRONTEND_URLS?.split(',').map(origin => origin.trim()) || [
   'http://localhost:3000',
   'http://localhost:3001',
@@ -26,7 +26,10 @@ console.log('✅ Allowed Origins:', allowedOrigins);
 
 const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       console.error('❌ CORS blocked origin:', origin);
@@ -34,67 +37,145 @@ const corsOptions = {
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With',
+    'x-request-timestamp', // FIXED: Added missing header
+    'Accept',
+    'Origin',
+    'x-api-key',
+    'x-client-version'
+  ],
+  exposedHeaders: [
+    'Authorization',
+    'x-request-id',
+    'x-response-time'
+  ],
+  optionsSuccessStatus: 200 // Support legacy browsers
 };
 
 app.use(cors(corsOptions));
 
-// Security Headers
-app.use(helmet());
+// Handle preflight requests explicitly
+app.options('*', cors(corsOptions));
 
-// Rate Limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: {
-    error: 'Too many requests, please try again later',
-    code: 'RATE_LIMIT_EXCEEDED'
+// Security Headers - Enhanced
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
   },
+  crossOriginEmbedderPolicy: false // Allow embedding for development
+}));
+
+// Rate Limiting - More flexible
+const createRateLimit = (windowMs, max, message) => rateLimit({
+  windowMs,
+  max,
+  message: { error: message, code: 'RATE_LIMIT_EXCEEDED' },
   standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    // Skip rate limiting for health checks
+    return req.path === '/health';
+  }
 });
-app.use(limiter);
 
-// Body Parsers
-app.use(express.json({ limit: '10kb', strict: true }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+// General API rate limiting
+app.use(createRateLimit(15 * 60 * 1000, 100, 'Too many requests, please try again later'));
 
-// Request Logger
+// Stricter rate limiting for auth routes
+app.use('/auth', createRateLimit(15 * 60 * 1000, 20, 'Too many authentication attempts'));
+
+// Body Parsers with better validation
+app.use(express.json({ 
+  limit: '10kb', 
+  strict: true,
+  type: ['application/json', 'text/plain']
+}));
+app.use(express.urlencoded({ 
+  extended: true, 
+  limit: '10kb',
+  parameterLimit: 20
+}));
+
+// Request ID middleware for tracking
 app.use((req, res, next) => {
-  const timestamp = new Date().toISOString();
-  const ip = req.ip || req.connection.remoteAddress;
-  console.log(`[${timestamp}] ${req.method} ${req.path} - IP: ${ip}`);
+  req.id = Math.random().toString(36).substring(7);
+  res.setHeader('x-request-id', req.id);
   next();
 });
 
-// Database Connection Test
-const pool = require('./pool');
-pool.connect()
-  .then(client => {
-    console.log('✅ Database connected successfully');
-    client.release();
-  })
-  .catch(err => {
-    console.error('❌ Database connection failed:', err.message);
+// Enhanced Request Logger
+app.use((req, res, next) => {
+  const timestamp = new Date().toISOString();
+  const ip = req.ip || req.connection.remoteAddress;
+  const userAgent = req.get('User-Agent') || 'Unknown';
+  
+  console.log(`[${timestamp}] ${req.method} ${req.path} - IP: ${ip} - ID: ${req.id}`);
+  
+  // Log body for POST requests (excluding sensitive data)
+  if (req.method === 'POST' && req.body) {
+    const logBody = { ...req.body };
+    // Hide sensitive fields
+    if (logBody.password) logBody.password = '***';
+    if (logBody.confirmPassword) logBody.confirmPassword = '***';
+    console.log(`[${req.id}] Request body:`, logBody);
+  }
+  
+  next();
+});
+
+// Response time tracking
+app.use((req, res, next) => {
+  const startTime = Date.now();
+  
+  res.on('finish', () => {
+    const duration = Date.now() - startTime;
+    res.setHeader('x-response-time', `${duration}ms`);
+    console.log(`[${req.id}] Response: ${res.statusCode} - ${duration}ms`);
   });
+  
+  next();
+});
+
+// Database connection is handled in pool.js (no need to test here)
+const pool = require('./pool');
 
 // Routes
 app.use('/auth', authRoutes);
 
-// Health Check Route
+// Enhanced Health Check Route
 app.get('/health', async (req, res) => {
   try {
-    const result = await pool.query('SELECT NOW() as current_time');
+    const dbStartTime = Date.now();
+    const result = await pool.query('SELECT NOW() as current_time, version() as version');
+    const dbResponseTime = Date.now() - dbStartTime;
+    
     res.json({
       status: 'healthy',
       timestamp: new Date().toISOString(),
       uptime: Math.floor(process.uptime()),
+      version: '1.0.0',
+      environment: process.env.NODE_ENV,
       database: {
         status: 'connected',
-        currentTime: result.rows[0].current_time
+        responseTime: `${dbResponseTime}ms`,
+        currentTime: result.rows[0].current_time,
+        version: result.rows[0].version.split(' ')[0]
+      },
+      cors: {
+        allowedOrigins: allowedOrigins.length
       }
     });
   } catch (error) {
+    console.error('❌ Health check failed:', error);
     res.status(503).json({
       status: 'unhealthy',
       timestamp: new Date().toISOString(),
@@ -106,28 +187,41 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// API Info Route
+// API Info Route - Enhanced
 app.get('/', (req, res) => {
   res.json({
     name: 'HawalaSend API',
     version: '1.0.0',
     status: 'running',
     timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
     endpoints: {
-      auth: '/auth (POST /register, POST /login)',
-      health: '/health (GET)',
+      auth: {
+        register: 'POST /auth/register',
+        login: 'POST /auth/login',
+        verify: 'GET /auth/verify-session'
+      },
+      health: 'GET /health',
+      documentation: 'GET /'
+    },
+    cors: {
+      enabled: true,
+      allowedOrigins: allowedOrigins
     }
   });
 });
 
-// 404 Handler
+// Catch-all for undefined routes
 app.use('*', (req, res) => {
   console.log(`❌ 404 - Route not found: ${req.method} ${req.originalUrl}`);
   res.status(404).json({ 
     error: 'Route not found',
     code: 'ROUTE_NOT_FOUND',
     path: req.originalUrl,
-    method: req.method
+    method: req.method,
+    availableEndpoints: ['/auth', '/health', '/'],
+    timestamp: new Date().toISOString(),
+    requestId: req.id
   });
 });
 
@@ -140,26 +234,51 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`• Port: ${PORT}`);
   console.log(`• Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`• Database: ${process.env.PGDATABASE || 'Not configured'}`);
+  console.log(`• CORS Origins: ${allowedOrigins.length} configured`);
   console.log("📡 Server ready to accept connections");
 });
 
-// Graceful Shutdown
+// Enhanced Graceful Shutdown
 const shutdown = async (signal) => {
   console.log(`\n${signal} received. Shutting down gracefully...`);
+  
+  // Stop accepting new connections
   server.close(async () => {
     console.log('✅ HTTP server closed');
+    
     try {
+      // Close database connections
       await pool.end();
       console.log('✅ Database connections closed');
+      
+      // Exit successfully
+      console.log('✅ Graceful shutdown completed');
       process.exit(0);
     } catch (error) {
       console.error('❌ Error during shutdown:', error);
       process.exit(1);
     }
   });
+  
+  // Force shutdown after 10 seconds
+  setTimeout(() => {
+    console.error('❌ Forced shutdown after 10s timeout');
+    process.exit(1);
+  }, 10000);
 };
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
 
 module.exports = app;
