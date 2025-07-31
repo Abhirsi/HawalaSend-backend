@@ -15,11 +15,6 @@ const validatePassword = (password) => {
   return password && password.length >= 8;
 };
 
-module.exports = {
-  validateEmail,
-  validatePassword
-};
-
 /**
  * Sanitization middleware to prevent XSS attacks
  */
