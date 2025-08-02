@@ -18,7 +18,6 @@ app.set('trust proxy', 1);
 // CORS Configuration - FIXED
 const allowedOrigins = process.env.FRONTEND_URLS?.split(',').map(origin => origin.trim()) || [
   'http://localhost:3000',
-  'http://localhost:3001',
   'https://hawalasend.vercel.app'
 ];
 
@@ -41,6 +40,7 @@ const corsOptions = {
   allowedHeaders: [
     'Content-Type', 
     'Authorization', 
+    'x-api-version',
     'X-Requested-With',
     'x-request-timestamp', // FIXED: Added missing header
     'Accept',
