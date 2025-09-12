@@ -1,8 +1,10 @@
 // errorHandler.js
-module.exports = (err, req, res, next) => {
+const errorHandler = (err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({
     error: 'Internal Server Error',
-    message: process.env.NODE_ENV === 'development' ? err.message : undefined
+    message: process.env.NODE_ENV === 'development' ? err.message : undefined,
   });
 };
+
+export default errorHandler;

@@ -1,45 +1,39 @@
-// backend/pool.js
-require('dotenv').config({ path: '.env.local' });
-const { Pool } = require('pg');
+// pool.js - Load environment variables first
+// pool.js - Load environment variables first
+import dotenv from 'dotenv';
 
-let pool;
+// Load environment variables before creating the pool
+dotenv.config({ path: '.env.local' });
+dotenv.config({ path: '.env', override: false });
 
-console.log('🔍 Database Environment Check:', {
-  NODE_ENV: process.env.NODE_ENV,
-  DATABASE_URL: process.env.DATABASE_URL ? '✅ Present' : '❌ Missing',
-  PGHOST: process.env.PGHOST || 'Not set',
+import { Pool } from 'pg';
+
+// Debug: Show DATABASE_URL is loaded
+console.log('🔍 Pool.js - DATABASE_URL loaded:', process.env.DATABASE_URL ? 'YES' : 'NO');
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  max: process.env.DB_POOL_MAX || 10,
+  min: process.env.DB_POOL_MIN || 2,
+  idleTimeoutMillis: process.env.DB_POOL_IDLE_TIMEOUT || 30000,
+  connectionTimeoutMillis: process.env.DB_POOL_CONN_TIMEOUT || 5000,
 });
 
-if (process.env.DATABASE_URL) {
-  // Production (Railway) - Use DATABASE_URL
-  pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? {
-      rejectUnauthorized: false
-    } : false,
+// Debug: Log the database user
+pool.connect((err, client, release) => {
+  if (err) {
+    console.error('Error connecting to database:', err);
+    return;
+  }
+  client.query('SELECT current_user;', (err, result) => {
+    if (err) {
+      console.error('Error querying current_user:', err);
+    } else {
+      console.log('Database connected as user:', result.rows[0].current_user);
+    }
+    release();
   });
-  console.log('✅ Using DATABASE_URL for PostgreSQL connection');
-} else {
-  // Local development
-  pool = new Pool({
-    user: process.env.DB_USER || 'postgres',
-    host: process.env.DB_HOST || 'localhost',
-    database: process.env.DB_NAME || 'Money_transfer_app',
-    password: process.env.DB_PASSWORD || 'yourpassword',
-    port: parseInt(process.env.DB_PORT) || 5432,
-    ssl: false,
-  });
-  console.log('✅ Using local PostgreSQL connection');
-}
+});
 
-// Test connection on startup
-pool.connect()
-  .then(client => {
-    console.log('✅ Database connected successfully');
-    client.release();
-  })
-  .catch(err => {
-    console.error('❌ Database connection failed:', err.message);
-  });
-
-module.exports = pool;
+export default pool;

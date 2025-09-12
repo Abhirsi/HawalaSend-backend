@@ -1,17 +1,11 @@
-// backend/migrations/initDB.js
-const pool = require('../config/database');
-const logger = require('./logger');
-const { InternalServerError } = require('../errors');
+import pool from '../pool.js';
 
-const runMigrations = async () => {
-  const client = await pool.connect();
+async function runMigrations() {
+  console.log('Starting database migrations...');
+
   try {
-    await client.query('BEGIN');
-
-    logger.info('Starting database migrations...');
-
-    // ================== CORE TABLES ==================
-    await client.query(`
+    // Create users table
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         username VARCHAR(50) UNIQUE NOT NULL,
@@ -39,8 +33,10 @@ const runMigrations = async () => {
         CONSTRAINT chk_password_length CHECK (length(password_hash) >= 60)
       );
     `);
+    console.log('✅ Users table created');
 
-    await client.query(`
+    // Create transactions table
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS transactions (
         id SERIAL PRIMARY KEY,
         sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -62,9 +58,10 @@ const runMigrations = async () => {
         )
       );
     `);
+    console.log('✅ Transactions table created');
 
-    // ================== SECURITY TABLES ==================
-    await client.query(`
+    // Create sessions table
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS sessions (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -83,8 +80,10 @@ const runMigrations = async () => {
         CONSTRAINT chk_session_expiry CHECK (expires_at > created_at)
       );
     `);
+    console.log('✅ Sessions table created');
 
-    await client.query(`
+    // Create password_history table
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS password_history (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -95,8 +94,10 @@ const runMigrations = async () => {
         CONSTRAINT chk_history_password_length CHECK (length(password_hash) >= 60)
       );
     `);
+    console.log('✅ Password history table created');
 
-    await client.query(`
+    // Create security_logs table
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS security_logs (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -109,8 +110,10 @@ const runMigrations = async () => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    console.log('✅ Security logs table created');
 
-    await client.query(`
+    // Create auth_attempts table
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS auth_attempts (
         id SERIAL PRIMARY KEY,
         ip_address VARCHAR(45) NOT NULL,
@@ -124,35 +127,28 @@ const runMigrations = async () => {
         )
       );
     `);
+    console.log('✅ Auth attempts table created');
 
-    // ================== INDEXES ==================
-    await client.query(`
-      -- User indexes
+    // Create indexes
+    await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users(LOWER(email));
       CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
       CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone) WHERE phone IS NOT NULL;
-      
-      -- Transaction indexes
       CREATE INDEX IF NOT EXISTS idx_transactions_sender_status ON transactions(sender_id, status);
       CREATE INDEX IF NOT EXISTS idx_transactions_receiver_status ON transactions(receiver_id, status);
       CREATE INDEX IF NOT EXISTS idx_transactions_created_currency ON transactions(created_at, currency);
       CREATE INDEX IF NOT EXISTS idx_transactions_reference ON transactions(reference_id);
-      
-      -- Session indexes (partial for active sessions)
       CREATE INDEX IF NOT EXISTS idx_sessions_user_active ON sessions(user_id) WHERE is_active = true;
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(encode(sha256(token::bytea), 'hex'));
       CREATE INDEX IF NOT EXISTS idx_sessions_expires_active ON sessions(expires_at) WHERE is_active = true;
-      
-      -- Security indexes
       CREATE INDEX IF NOT EXISTS idx_security_logs_user_action ON security_logs(user_id, action);
       CREATE INDEX IF NOT EXISTS idx_security_logs_created_status ON security_logs(created_at, status);
-      
-      -- Auth attempt indexes (partial for blocked IPs)
       CREATE INDEX IF NOT EXISTS idx_auth_attempts_ip_blocked ON auth_attempts(ip_address) WHERE is_blocked = true;
     `);
+    console.log('✅ Indexes created');
 
-    // ================== FUNCTIONS & TRIGGERS ==================
-    await client.query(`
+    // Create update_modified_column function and triggers
+    await pool.query(`
       CREATE OR REPLACE FUNCTION update_modified_column()
       RETURNS TRIGGER AS $$
       BEGIN
@@ -161,32 +157,25 @@ const runMigrations = async () => {
       END;
       $$ LANGUAGE plpgsql;
 
+      DROP TRIGGER IF EXISTS update_user_modtime ON users;
       CREATE TRIGGER update_user_modtime
       BEFORE UPDATE ON users
       FOR EACH ROW EXECUTE FUNCTION update_modified_column();
 
+      DROP TRIGGER IF EXISTS update_transaction_modtime ON transactions;
       CREATE TRIGGER update_transaction_modtime
       BEFORE UPDATE ON transactions
       FOR EACH ROW EXECUTE FUNCTION update_modified_column();
     `);
+    console.log('✅ Functions and triggers created');
 
-    await client.query('COMMIT');
-    logger.info('✅ Database migrations completed successfully');
+    console.log('✅ Database migrations completed successfully');
   } catch (error) {
-    await client.query('ROLLBACK');
-    logger.error('Database migration failed', {
-      error: error.message,
-      stack: error.stack
-    });
-    throw new InternalServerError('Database initialization failed');
-  } finally {
-    client.release();
+    console.error('Database migration failed', error);
+    throw new Error('Database initialization failed');
   }
-};
+}
 
-// Export with version tracking
-module.exports = {
-  version: 1,
+export default {
   run: runMigrations,
-  description: 'Initial database schema setup'
 };
