@@ -10,28 +10,20 @@ dotenv.config({ path: './.env.local' });
 
 const app = express();
 
-// Simple CORS configuration that works
-const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:3000', 
-  'https://hawalasend.vercel.app'
-];
-
+// Keep YOUR working CORS configuration
+const allowedOrigins = [process.env.FRONTEND_URL || 'http://localhost:3000', 'https://hawalasend.vercel.app'];
 console.log('✅ Allowed Origins:', allowedOrigins);
 
-app.use(cors({ 
-  origin: allowedOrigins, 
-  credentials: true 
-}));
-
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 
-// Routes
+// Keep YOUR working routes (this is what makes your app work!)
 app.use('/auth', authRoutes);
 app.use('/api', transferRoutes);
 app.use('/transfers', transferRoutes);
 app.use('/transactions', transactionRoutes);
 
-// Simple health check
+// Keep YOUR working health check
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
@@ -44,16 +36,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Root route
-app.get('/', (req, res) => {
-  res.json({
-    message: 'HawalaSend API is running!',
-    status: 'healthy',
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Start server
+// Keep YOUR working port configuration
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log('🚀 HawalaSend backend server running...');
