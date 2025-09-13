@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
+import pool from './pool.js';
 import authRoutes from './routes/auth.js';
 import transferRoutes from './routes/transfer.js';
 import transactionRoutes from './routes/transactions.js';
