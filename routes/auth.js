@@ -21,8 +21,10 @@ router.post('/login', async (req, res) => {
       const token = jwt.sign(
         { id: 1, email: email },
         'your-secret-key',
-        { expiresIn: '24h' }
+        { expiresIn: '24h' } // Updated from default to 24 hours
       );
+      
+      console.log('User logged in successfully:', email);
       
       return res.json({
         message: 'Login successful',
