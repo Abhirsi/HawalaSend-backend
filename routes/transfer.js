@@ -1,136 +1,195 @@
-// routes/transfers.js - Complete production-ready transfer functionality
+// routes/transfers.js - Enhanced security transfer routes
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import pool from '../pool.js';
+import { transferRateLimit, validateTransfer } from '../middleware/security.js';
+import { authenticate } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
-// JWT Authentication Middleware
-const authenticate = async (req, res, next) => {
+// Helper function to log security events
+const logSecurityEvent = async (userId, action, ip, userAgent, success, details = {}) => {
   try {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    
-    if (!token) {
-      console.log('Transfer: No token provided');
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-    
-    const decoded = jwt.verify(token, JWT_SECRET);
-    console.log('Transfer: Token verified for user:', decoded.id);
-    
-    // Get user from database
-    const userResult = await pool.query(
-      'SELECT id, email, username FROM users WHERE id = $1',
-      [decoded.id]
+    await pool.query(
+      'INSERT INTO security_logs (user_id, action, ip_address, user_agent, success, details, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())',
+      [userId, action, ip, userAgent?.substring(0, 500), success, JSON.stringify(details)]
     );
-    
-    if (userResult.rows.length === 0) {
-      return res.status(401).json({ error: 'User not found' });
-    }
-    
-    req.user = userResult.rows[0];
-    next();
   } catch (error) {
-    console.error('Transfer auth error:', error.message);
-    return res.status(401).json({ error: 'Invalid token' });
+    console.error('Failed to log security event:', error);
   }
 };
 
-// POST /transfers/send - Send money transfer
-router.post('/send', authenticate, async (req, res) => {
+// POST /transfers/send - Secure money transfer endpoint
+router.post('/send', transferRateLimit, authenticate, validateTransfer, async (req, res) => {
   const client = await pool.connect();
+  const startTime = Date.now();
+  const { recipient_email, amount, description, pin } = req.body;
+  const senderId = req.user.id;
+  const clientIp = req.ip || req.connection.remoteAddress;
+  const userAgent = req.get('User-Agent');
   
   try {
-    const { recipient_email, amount, description, pin } = req.body;
-    const senderId = req.user.id;
+    await client.query('BEGIN');
     
     console.log(`Transfer request from user ${senderId} to ${recipient_email} for $${amount}`);
+    console.log('Request body:', req.body);
     
-    // Validate input
-    if (!recipient_email || !amount || !pin) {
-      return res.status(400).json({ error: 'Recipient email, amount, and PIN are required' });
-    }
-    
-    // Validate PIN (simple check)
-    if (pin !== '1234') {
+    // Validate PIN (for demo - in production, hash and store PINs)
+    const pinString = String(pin);
+    if (pinString !== '1234') {
+      await logSecurityEvent(senderId, 'TRANSFER_INVALID_PIN', clientIp, userAgent, false, {
+        recipient: recipient_email,
+        amount: amount,
+        attemptedPin: pinString
+      });
+      
+      console.log(`Transfer failed - Invalid PIN: ${pinString}`);
+      await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Invalid PIN' });
     }
     
+    // Get sender information and verify balance
+    const senderResult = await client.query(
+      'SELECT id, email, username, first_name, last_name, balance FROM users WHERE id = $1',
+      [senderId]
+    );
+    
+    const sender = senderResult.rows[0];
+    if (!sender) {
+      await logSecurityEvent(senderId, 'TRANSFER_SENDER_NOT_FOUND', clientIp, userAgent, false, {
+        recipient: recipient_email,
+        amount: amount
+      });
+      
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Sender not found' });
+    }
+    
+    // Check if sender has sufficient balance
+    const senderBalance = parseFloat(sender.balance) || 0;
     const transferAmount = parseFloat(amount);
-    if (isNaN(transferAmount) || transferAmount <= 0) {
-      return res.status(400).json({ error: 'Invalid amount' });
-    }
+    const fee = transferAmount * 0.01; // 1% fee
+    const totalDeduction = transferAmount + fee;
     
-    if (transferAmount < 1) {
-      return res.status(400).json({ error: 'Minimum transfer amount is $1.00' });
+    if (senderBalance < totalDeduction) {
+      await logSecurityEvent(senderId, 'TRANSFER_INSUFFICIENT_FUNDS', clientIp, userAgent, false, {
+        recipient: recipient_email,
+        amount: amount,
+        balance: senderBalance,
+        required: totalDeduction
+      });
+      
+      console.log(`Transfer failed - Insufficient funds: Balance $${senderBalance}, Required $${totalDeduction}`);
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        error: 'Insufficient funds',
+        balance: senderBalance,
+        required: totalDeduction
+      });
     }
-    
-    if (transferAmount > 10000) {
-      return res.status(400).json({ error: 'Maximum transfer amount is $10,000.00' });
-    }
-    
-    // Start database transaction
-    await client.query('BEGIN');
     
     // Find recipient
     const recipientResult = await client.query(
       'SELECT id, email, username FROM users WHERE LOWER(email) = LOWER($1)',
-      [recipient_email]
+      [recipient_email.trim()]
     );
     
-    if (recipientResult.rows.length === 0) {
+    const recipient = recipientResult.rows[0];
+    if (!recipient) {
+      await logSecurityEvent(senderId, 'TRANSFER_RECIPIENT_NOT_FOUND', clientIp, userAgent, false, {
+        recipient: recipient_email,
+        amount: amount
+      });
+      
+      console.log(`Transfer failed - Recipient not found: ${recipient_email}`);
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Recipient not found' });
     }
     
-    const recipient = recipientResult.rows[0];
-    
-    if (recipient.id === senderId) {
+    // Prevent self-transfer
+    if (sender.id === recipient.id) {
+      await logSecurityEvent(senderId, 'TRANSFER_SELF_ATTEMPT', clientIp, userAgent, false, {
+        recipient: recipient_email,
+        amount: amount
+      });
+      
+      console.log(`Transfer failed - Self transfer attempt`);
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Cannot transfer to yourself' });
     }
     
-    // Mock balance check (replace with actual balance logic later)
-    const currentBalance = 2500.00;
-    
-    if (transferAmount > currentBalance) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Insufficient balance' });
-    }
-    
-    // Record transaction in database
-    const transactionResult = await client.query(
-      `INSERT INTO transactions (sender_id, receiver_id, amount, description, status, completed_at, created_at)
-       VALUES ($1, $2, $3, $4, 'completed', NOW(), NOW())
-       RETURNING id, created_at`,
-      [senderId, recipient.id, transferAmount, description || `Transfer to ${recipient.email}`]
+    // Update sender balance
+    await client.query(
+      'UPDATE users SET balance = balance - $1, updated_at = NOW() WHERE id = $2',
+      [totalDeduction, senderId]
     );
     
-    // Commit transaction
+    // Update recipient balance
+    await client.query(
+      'UPDATE users SET balance = balance + $1, updated_at = NOW() WHERE id = $2',
+      [transferAmount, recipient.id]
+    );
+    
+    // Create transaction record
+    const transactionResult = await client.query(
+      `INSERT INTO transactions (sender_id, receiver_id, amount, fee, description, status, completed_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, 'completed', NOW(), NOW())
+       RETURNING id, created_at`,
+      [senderId, recipient.id, transferAmount, fee, description || 'Money transfer']
+    );
+    
+    const transaction = transactionResult.rows[0];
+    
+    // Get updated sender balance
+    const updatedBalanceResult = await client.query(
+      'SELECT balance FROM users WHERE id = $1',
+      [senderId]
+    );
+    const newBalance = parseFloat(updatedBalanceResult.rows[0].balance);
+    
     await client.query('COMMIT');
     
-    console.log(`Transfer successful: $${transferAmount} from user ${senderId} to user ${recipient.id}`);
+    // Log successful transfer
+    await logSecurityEvent(senderId, 'TRANSFER_SUCCESS', clientIp, userAgent, true, {
+      transactionId: transaction.id,
+      recipient: recipient_email,
+      amount: transferAmount,
+      fee: fee,
+      newBalance: newBalance,
+      duration: Date.now() - startTime
+    });
     
-    // Calculate new balance
-    const newBalance = currentBalance - transferAmount;
+    console.log(`Transfer successful: $${transferAmount} from user ${senderId} to user ${recipient.id}`);
     
     res.json({
       success: true,
       message: 'Transfer completed successfully',
       transaction: {
-        id: transactionResult.rows[0].id,
+        id: transaction.id,
         amount: transferAmount,
-        recipient: recipient.email,
-        description: description,
-        timestamp: transactionResult.rows[0].created_at
+        fee: fee,
+        recipient: {
+          email: recipient.email,
+          username: recipient.username
+        },
+        description: description || 'Money transfer',
+        status: 'completed',
+        created_at: transaction.created_at
       },
       newBalance: newBalance
     });
     
   } catch (error) {
     await client.query('ROLLBACK');
+    
+    await logSecurityEvent(senderId, 'TRANSFER_ERROR', clientIp, userAgent, false, {
+      recipient: recipient_email,
+      amount: amount,
+      error: error.message,
+      duration: Date.now() - startTime
+    });
+    
     console.error('Transfer error:', error);
     res.status(500).json({ error: 'Transfer failed. Please try again.' });
   } finally {
@@ -138,57 +197,96 @@ router.post('/send', authenticate, async (req, res) => {
   }
 });
 
-// GET /transfers/history - Get transfer history for user
+// GET /transfers/history - User's transfer history
 router.get('/history', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+    
     console.log(`Fetching transfer history for user ${userId}`);
     
-    const result = await pool.query(
-      `SELECT t.*, 
-              u_sender.email as sender_email, 
-              u_receiver.email as receiver_email,
-              CASE 
-                WHEN t.sender_id = $1 THEN 'sent'
-                WHEN t.receiver_id = $1 THEN 'received'
-              END as type
-       FROM transactions t
-       LEFT JOIN users u_sender ON t.sender_id = u_sender.id
-       LEFT JOIN users u_receiver ON t.receiver_id = u_receiver.id
-       WHERE t.sender_id = $1 OR t.receiver_id = $1
-       ORDER BY t.created_at DESC
-       LIMIT 50`,
+    // Get transfers where user is sender or receiver
+    const transfers = await pool.query(`
+      SELECT 
+        t.id,
+        t.amount,
+        t.fee,
+        t.description,
+        t.status,
+        t.created_at,
+        t.completed_at,
+        CASE 
+          WHEN t.sender_id = $1 THEN 'sent'
+          ELSE 'received'
+        END as type,
+        CASE 
+          WHEN t.sender_id = $1 THEN r.email
+          ELSE s.email  
+        END as other_party_email,
+        CASE 
+          WHEN t.sender_id = $1 THEN r.username
+          ELSE s.username
+        END as other_party_username
+      FROM transactions t
+      JOIN users s ON t.sender_id = s.id
+      JOIN users r ON t.receiver_id = r.id
+      WHERE t.sender_id = $1 OR t.receiver_id = $1
+      ORDER BY t.created_at DESC
+      LIMIT $2 OFFSET $3
+    `, [userId, limit, offset]);
+    
+    // Get total count for pagination
+    const countResult = await pool.query(
+      'SELECT COUNT(*) FROM transactions WHERE sender_id = $1 OR receiver_id = $1',
       [userId]
     );
-
-    console.log(`Found ${result.rows.length} transfers`);
     
-    const transfers = result.rows.map(tx => ({
-      id: tx.id,
-      amount: parseFloat(tx.amount),
-      description: tx.description,
-      status: tx.status,
-      type: tx.type,
-      createdAt: tx.created_at,
-      completedAt: tx.completed_at,
-      otherParty: tx.type === 'sent' ? tx.receiver_email : tx.sender_email
-    }));
+    const totalCount = parseInt(countResult.rows[0].count);
+    const totalPages = Math.ceil(totalCount / limit);
     
-    res.json(transfers);
+    res.json({
+      transfers: transfers.rows,
+      pagination: {
+        currentPage: page,
+        totalPages,
+        totalCount,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      }
+    });
+    
   } catch (error) {
-    console.error('Error fetching transfer history:', error);
+    console.error('Transfer history error:', error);
     res.status(500).json({ error: 'Failed to fetch transfer history' });
   }
 });
 
-// GET /transfers/balance - Get user balance (mock for now)
+// GET /transfers/balance - User's current balance
 router.get('/balance', authenticate, async (req, res) => {
   try {
-    // Mock balance - replace with actual balance calculation
-    const balance = 2500.00;
+    const userId = req.user.id;
     
-    console.log(`Balance request for user ${req.user.id}: $${balance}`);
-    res.json({ balance: balance });
+    const result = await pool.query(
+      'SELECT balance, first_name, last_name FROM users WHERE id = $1',
+      [userId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const user = result.rows[0];
+    
+    res.json({
+      balance: parseFloat(user.balance) || 0,
+      user: {
+        firstName: user.first_name,
+        lastName: user.last_name
+      }
+    });
+    
   } catch (error) {
     console.error('Balance fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch balance' });
@@ -198,15 +296,17 @@ router.get('/balance', authenticate, async (req, res) => {
 // POST /transfers/validate-recipient - Validate recipient before transfer
 router.post('/validate-recipient', authenticate, async (req, res) => {
   try {
-    const { email } = req.body;
+    const { recipient_email } = req.body;
+    const senderId = req.user.id;
     
-    if (!email) {
-      return res.status(400).json({ error: 'Email is required' });
+    if (!recipient_email) {
+      return res.status(400).json({ error: 'Recipient email is required' });
     }
     
+    // Check if recipient exists
     const result = await pool.query(
-      'SELECT id, email, username FROM users WHERE LOWER(email) = LOWER($1)',
-      [email]
+      'SELECT id, email, username, first_name, last_name FROM users WHERE LOWER(email) = LOWER($1)',
+      [recipient_email.trim()]
     );
     
     if (result.rows.length === 0) {
@@ -215,21 +315,23 @@ router.post('/validate-recipient', authenticate, async (req, res) => {
     
     const recipient = result.rows[0];
     
-    if (recipient.id === req.user.id) {
-      return res.status(400).json({ error: 'Cannot transfer to yourself' });
+    // Prevent self-validation
+    if (recipient.id === senderId) {
+      return res.status(400).json({ error: 'Cannot send money to yourself' });
     }
     
     res.json({
       valid: true,
       recipient: {
         email: recipient.email,
-        username: recipient.username
+        username: recipient.username,
+        fullName: `${recipient.first_name} ${recipient.last_name}`
       }
     });
     
   } catch (error) {
     console.error('Recipient validation error:', error);
-    res.status(500).json({ error: 'Validation failed' });
+    res.status(500).json({ error: 'Failed to validate recipient' });
   }
 });
 
