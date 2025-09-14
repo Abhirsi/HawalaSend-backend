@@ -1,33 +1,18 @@
-// routes/transfers.js - Enhanced security transfer routes
+// routes/transfers.js - Complete transfer functionality
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import pool from '../pool.js';
-import { transferRateLimit, validateTransfer } from '../middleware/security.js';
 import { authenticate } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
-// Helper function to log security events
-const logSecurityEvent = async (userId, action, ip, userAgent, success, details = {}) => {
-  try {
-    await pool.query(
-      'INSERT INTO security_logs (user_id, action, ip_address, user_agent, success, details, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())',
-      [userId, action, ip, userAgent?.substring(0, 500), success, JSON.stringify(details)]
-    );
-  } catch (error) {
-    console.error('Failed to log security event:', error);
-  }
-};
-
-// POST /transfers/send - Secure money transfer endpoint
-router.post('/send', transferRateLimit, authenticate, validateTransfer, async (req, res) => {
+// POST /transfers/send - Money transfer endpoint
+router.post('/send', authenticate, async (req, res) => {
   const client = await pool.connect();
   const startTime = Date.now();
   const { recipient_email, amount, description, pin } = req.body;
   const senderId = req.user.id;
-  const clientIp = req.ip || req.connection.remoteAddress;
-  const userAgent = req.get('User-Agent');
   
   try {
     await client.query('BEGIN');
@@ -35,21 +20,15 @@ router.post('/send', transferRateLimit, authenticate, validateTransfer, async (r
     console.log(`Transfer request from user ${senderId} to ${recipient_email} for $${amount}`);
     console.log('Request body:', req.body);
     
-    // Validate PIN (for demo - in production, hash and store PINs)
+    // Validate PIN (simple validation for demo)
     const pinString = String(pin);
     if (pinString !== '1234') {
-      await logSecurityEvent(senderId, 'TRANSFER_INVALID_PIN', clientIp, userAgent, false, {
-        recipient: recipient_email,
-        amount: amount,
-        attemptedPin: pinString
-      });
-      
       console.log(`Transfer failed - Invalid PIN: ${pinString}`);
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Invalid PIN' });
     }
     
-    // Get sender information and verify balance
+    // Get sender information
     const senderResult = await client.query(
       'SELECT id, email, username, first_name, last_name, balance FROM users WHERE id = $1',
       [senderId]
@@ -57,29 +36,17 @@ router.post('/send', transferRateLimit, authenticate, validateTransfer, async (r
     
     const sender = senderResult.rows[0];
     if (!sender) {
-      await logSecurityEvent(senderId, 'TRANSFER_SENDER_NOT_FOUND', clientIp, userAgent, false, {
-        recipient: recipient_email,
-        amount: amount
-      });
-      
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Sender not found' });
     }
     
-    // Check if sender has sufficient balance
+    // Check balance
     const senderBalance = parseFloat(sender.balance) || 0;
     const transferAmount = parseFloat(amount);
     const fee = transferAmount * 0.01; // 1% fee
     const totalDeduction = transferAmount + fee;
     
     if (senderBalance < totalDeduction) {
-      await logSecurityEvent(senderId, 'TRANSFER_INSUFFICIENT_FUNDS', clientIp, userAgent, false, {
-        recipient: recipient_email,
-        amount: amount,
-        balance: senderBalance,
-        required: totalDeduction
-      });
-      
       console.log(`Transfer failed - Insufficient funds: Balance $${senderBalance}, Required $${totalDeduction}`);
       await client.query('ROLLBACK');
       return res.status(400).json({ 
@@ -97,11 +64,6 @@ router.post('/send', transferRateLimit, authenticate, validateTransfer, async (r
     
     const recipient = recipientResult.rows[0];
     if (!recipient) {
-      await logSecurityEvent(senderId, 'TRANSFER_RECIPIENT_NOT_FOUND', clientIp, userAgent, false, {
-        recipient: recipient_email,
-        amount: amount
-      });
-      
       console.log(`Transfer failed - Recipient not found: ${recipient_email}`);
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Recipient not found' });
@@ -109,12 +71,7 @@ router.post('/send', transferRateLimit, authenticate, validateTransfer, async (r
     
     // Prevent self-transfer
     if (sender.id === recipient.id) {
-      await logSecurityEvent(senderId, 'TRANSFER_SELF_ATTEMPT', clientIp, userAgent, false, {
-        recipient: recipient_email,
-        amount: amount
-      });
-      
-      console.log(`Transfer failed - Self transfer attempt`);
+      console.log('Transfer failed - Self transfer attempt');
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Cannot transfer to yourself' });
     }
@@ -141,7 +98,7 @@ router.post('/send', transferRateLimit, authenticate, validateTransfer, async (r
     
     const transaction = transactionResult.rows[0];
     
-    // Get updated sender balance
+    // Get updated balance
     const updatedBalanceResult = await client.query(
       'SELECT balance FROM users WHERE id = $1',
       [senderId]
@@ -149,16 +106,6 @@ router.post('/send', transferRateLimit, authenticate, validateTransfer, async (r
     const newBalance = parseFloat(updatedBalanceResult.rows[0].balance);
     
     await client.query('COMMIT');
-    
-    // Log successful transfer
-    await logSecurityEvent(senderId, 'TRANSFER_SUCCESS', clientIp, userAgent, true, {
-      transactionId: transaction.id,
-      recipient: recipient_email,
-      amount: transferAmount,
-      fee: fee,
-      newBalance: newBalance,
-      duration: Date.now() - startTime
-    });
     
     console.log(`Transfer successful: $${transferAmount} from user ${senderId} to user ${recipient.id}`);
     
@@ -182,14 +129,6 @@ router.post('/send', transferRateLimit, authenticate, validateTransfer, async (r
     
   } catch (error) {
     await client.query('ROLLBACK');
-    
-    await logSecurityEvent(senderId, 'TRANSFER_ERROR', clientIp, userAgent, false, {
-      recipient: recipient_email,
-      amount: amount,
-      error: error.message,
-      duration: Date.now() - startTime
-    });
-    
     console.error('Transfer error:', error);
     res.status(500).json({ error: 'Transfer failed. Please try again.' });
   } finally {
@@ -237,7 +176,7 @@ router.get('/history', authenticate, async (req, res) => {
       LIMIT $2 OFFSET $3
     `, [userId, limit, offset]);
     
-    // Get total count for pagination
+    // Get total count
     const countResult = await pool.query(
       'SELECT COUNT(*) FROM transactions WHERE sender_id = $1 OR receiver_id = $1',
       [userId]
@@ -290,48 +229,6 @@ router.get('/balance', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Balance fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch balance' });
-  }
-});
-
-// POST /transfers/validate-recipient - Validate recipient before transfer
-router.post('/validate-recipient', authenticate, async (req, res) => {
-  try {
-    const { recipient_email } = req.body;
-    const senderId = req.user.id;
-    
-    if (!recipient_email) {
-      return res.status(400).json({ error: 'Recipient email is required' });
-    }
-    
-    // Check if recipient exists
-    const result = await pool.query(
-      'SELECT id, email, username, first_name, last_name FROM users WHERE LOWER(email) = LOWER($1)',
-      [recipient_email.trim()]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Recipient not found' });
-    }
-    
-    const recipient = result.rows[0];
-    
-    // Prevent self-validation
-    if (recipient.id === senderId) {
-      return res.status(400).json({ error: 'Cannot send money to yourself' });
-    }
-    
-    res.json({
-      valid: true,
-      recipient: {
-        email: recipient.email,
-        username: recipient.username,
-        fullName: `${recipient.first_name} ${recipient.last_name}`
-      }
-    });
-    
-  } catch (error) {
-    console.error('Recipient validation error:', error);
-    res.status(500).json({ error: 'Failed to validate recipient' });
   }
 });
 
