@@ -11,7 +11,9 @@ import {
   securityHeaders, 
   generalRateLimit, 
   securityLogger, 
-  sanitizeInput 
+  sanitizeInput,
+  apiVersioning,
+  requestSizeLimiter 
 } from './middleware/security.js';
 
 dotenv.config({ path: './.env.local' });
@@ -19,7 +21,7 @@ dotenv.config({ path: './.env.local' });
 const app = express();
 
 // CRITICAL: Fix trust proxy for Railway deployment
-app.set('trust proxy', true);
+app.set('trust proxy', 1); // Changed from true to 1 for Railway compatibility
 
 // Security headers - must be first
 app.use(securityHeaders);
@@ -32,20 +34,35 @@ app.use(generalRateLimit);
 
 // Input sanitization
 app.use(sanitizeInput);
+app.use(apiVersioning);
+app.use(requestSizeLimiter);
 
 // CORS configuration
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:3000', 
-  'https://hawalasend.vercel.app'
-];
+  'https://hawalasend.vercel.app',
+  'https://hawalasend-git-main-victor-kiptoos-projects.vercel.app', // Vercel preview URLs
+  'https://hawalasend-victor-kiptoos-projects.vercel.app' // Alternative Vercel URL
+].filter(Boolean); // Remove any undefined values
 
 console.log('✅ Allowed Origins:', allowedOrigins);
 
 app.use(cors({ 
-  origin: allowedOrigins, 
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log(`🚫 CORS blocked origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  optionsSuccessStatus: 200 // Some legacy browsers choke on 204
 }));
 
 app.use(express.json({ limit: '10mb' }));
@@ -54,10 +71,15 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Test database connection on startup
 const testDatabaseConnection = async () => {
   try {
-    await pool.query('SELECT NOW()');
+    const result = await pool.query('SELECT NOW(), version()');
     console.log('🔗 Database connected as user:', process.env.PGUSER || 'postgres');
+    console.log('📊 Database info:', result.rows[0].version.split(' ')[0]);
   } catch (error) {
-    console.error('❌ Error connecting to database:', error);
+    console.error('❌ Error connecting to database:', error.message);
+    // Don't exit in production, log and continue
+    if (process.env.NODE_ENV === 'production') {
+      console.log('⚠️ Database connection failed, but server will continue running');
+    }
   }
 };
 
@@ -181,6 +203,7 @@ app.get('/health', async (req, res) => {
       status: 'healthy',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
+      environment: process.env.NODE_ENV || 'development',
       security: {
         rateLimit: 'active',
         securityHeaders: 'active',
@@ -196,7 +219,7 @@ app.get('/health', async (req, res) => {
     res.status(500).json({
       status: 'unhealthy',
       timestamp: new Date().toISOString(),
-      error: error.message
+      error: process.env.NODE_ENV === 'production' ? 'Database connection failed' : error.message
     });
   }
 });
@@ -208,16 +231,19 @@ app.get('/', (req, res) => {
     status: 'healthy',
     security: 'enabled',
     timestamp: new Date().toISOString(),
-    version: '1.0.0'
+    version: '1.0.0',
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
 // 404 handler
 app.use('*', (req, res) => {
-  console.log(`🚫 404 - Route not found: ${req.method} ${req.originalUrl} - IP: ${req.ip}`);
+  const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.connection.remoteAddress;
+  console.log(`🚫 404 - Route not found: ${req.method} ${req.originalUrl} - IP: ${ip}`);
   res.status(404).json({
     error: 'Route not found',
-    message: 'The requested endpoint does not exist'
+    message: 'The requested endpoint does not exist',
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -225,9 +251,13 @@ app.use('*', (req, res) => {
 app.use((err, req, res, next) => {
   console.error('🚨 Global error:', err.stack);
   
+  // Don't expose sensitive error details in production
+  const isDevelopment = process.env.NODE_ENV !== 'production';
+  
   res.status(err.status || 500).json({
-    error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
-    timestamp: new Date().toISOString()
+    error: isDevelopment ? err.message : 'Internal server error',
+    timestamp: new Date().toISOString(),
+    ...(isDevelopment && { stack: err.stack })
   });
 });
 
@@ -241,6 +271,7 @@ const server = app.listen(PORT, () => {
   console.log('🔒 Security features: ENABLED');
   console.log('📡 Server ready to accept connections');
   
+  // Test database connection after server starts
   testDatabaseConnection();
 });
 
@@ -249,5 +280,19 @@ process.on('SIGTERM', () => {
   console.log('🔄 SIGTERM received, shutting down gracefully');
   server.close(() => {
     console.log('✅ Process terminated');
+    pool.end(); // Close database connections
   });
 });
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('💥 Uncaught Exception:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
+
+export default app;
