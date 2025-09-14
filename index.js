@@ -3,10 +3,10 @@ import express from 'express';
 import cors from 'cors';
 import pool from './pool.js';
 import authRoutes from './routes/auth.js';
-import transferRoutes from './routes/transfer.js';
+import transferRoutes from './routes/transfers.js';
 import transactionRoutes from './routes/transactions.js';
 
-// Import security middleware
+// Import simplified security middleware
 import { 
   securityHeaders, 
   generalRateLimit, 
@@ -18,13 +18,16 @@ dotenv.config({ path: './.env.local' });
 
 const app = express();
 
+// CRITICAL: Fix trust proxy for Railway deployment
+app.set('trust proxy', true);
+
 // Security headers - must be first
 app.use(securityHeaders);
 
 // Request logging and monitoring
 app.use(securityLogger);
 
-// General rate limiting
+// General rate limiting (simplified)
 app.use(generalRateLimit);
 
 // Input sanitization
@@ -58,27 +61,12 @@ const testDatabaseConnection = async () => {
   }
 };
 
-// Security status endpoint
-app.get('/security-status', (req, res) => {
-  res.json({
-    status: 'secure',
-    features: {
-      rateLimit: true,
-      securityHeaders: true,
-      inputSanitization: true,
-      corsProtection: true,
-      requestLogging: true
-    },
-    timestamp: new Date().toISOString()
-  });
-});
-
 // Database setup route - Creates tables and test users
 app.get('/setup-database', async (req, res) => {
   try {
     console.log('🔧 Creating database tables...');
     
-    // Create users table with enhanced security fields
+    // Create users table with security fields
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -96,7 +84,16 @@ app.get('/setup-database', async (req, res) => {
         updated_at TIMESTAMP DEFAULT NOW()
       )
     `);
-    console.log('✅ Users table created');
+    
+    // Add columns if they don't exist (for existing users table)
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS login_attempts INTEGER DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP NULL,
+      ADD COLUMN IF NOT EXISTS last_login TIMESTAMP NULL
+    `);
+    
+    console.log('✅ Users table updated');
     
     // Create transactions table  
     await pool.query(`
@@ -138,20 +135,20 @@ app.get('/setup-database', async (req, res) => {
     `);
     console.log('✅ Security logs table created');
     
-    // Insert test users with stronger password hash
-    const strongHash = '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/VdEbXq4TK'; // password123
+    // Insert test users (use existing password hash)
+    const testHash = '$2b$10$CwTycUXWue0Thq9StjUM0uehufrkKbXnq3wi5qCa6ZAQLn1s6Vhwi';
     
     await pool.query(`
       INSERT INTO users (email, username, password_hash, first_name, last_name, phone, balance) 
       VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (email) DO NOTHING
-    `, ['testuser@example.com', 'testuser', strongHash, 'Test', 'User', '+1234567890', 2500.00]);
+    `, ['testuser@example.com', 'testuser', testHash, 'Test', 'User', '+1234567890', 2500.00]);
     
     await pool.query(`
       INSERT INTO users (email, username, password_hash, first_name, last_name, phone, balance) 
       VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (email) DO NOTHING  
-    `, ['recipientuser@example.com', 'recipientuser', strongHash, 'Recipient', 'User', '+0987654321', 1000.00]);
+    `, ['recipientuser@example.com', 'recipientuser', testHash, 'Recipient', 'User', '+0987654321', 1000.00]);
     
-    // Verify tables were created
+    // Verify tables
     const usersCount = await pool.query('SELECT COUNT(*) FROM users');
     const transactionsCount = await pool.query('SELECT COUNT(*) FROM transactions');
     const securityLogsCount = await pool.query('SELECT COUNT(*) FROM security_logs');
@@ -170,7 +167,7 @@ app.get('/setup-database', async (req, res) => {
   }
 });
 
-// Routes with security middleware
+// Routes
 app.use('/auth', authRoutes);
 app.use('/transfers', transferRoutes);
 app.use('/transactions', transactionRoutes);
@@ -187,7 +184,8 @@ app.get('/health', async (req, res) => {
       security: {
         rateLimit: 'active',
         securityHeaders: 'active',
-        inputSanitization: 'active'
+        inputSanitization: 'active',
+        trustProxy: 'enabled'
       },
       database: {
         status: 'connected',
@@ -226,11 +224,6 @@ app.use('*', (req, res) => {
 // Global error handler
 app.use((err, req, res, next) => {
   console.error('🚨 Global error:', err.stack);
-  
-  // Log security-related errors
-  if (err.type === 'security') {
-    console.log(`🔍 Security Error - ${req.method} ${req.path}: ${err.message}`);
-  }
   
   res.status(err.status || 500).json({
     error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
