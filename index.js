@@ -38,12 +38,17 @@ app.use(apiVersioning);
 app.use(requestSizeLimiter);
 
 // CORS configuration
+
+// CORS configuration - Add the actual Vercel deployment URL
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:3000', 
   'https://hawalasend.vercel.app',
-  'https://hawalasend-git-main-victor-kiptoos-projects.vercel.app', // Vercel preview URLs
-  'https://hawalasend-victor-kiptoos-projects.vercel.app' // Alternative Vercel URL
-].filter(Boolean); // Remove any undefined values
+  'https://hawalasend-git-main-victor-kiptoos-projects.vercel.app',
+  'https://hawalasend-victor-kiptoos-projects.vercel.app',
+  'https://hawalasend-frontend-24nebhn4t-abhirsis-projects.vercel.app', // ADD THIS LINE
+  // Also add a wildcard pattern for any Vercel preview deployments
+  /^https:\/\/hawalasend.*\.vercel\.app$/
+].filter(Boolean);
 
 console.log('✅ Allowed Origins:', allowedOrigins);
 
