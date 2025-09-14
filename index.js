@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import pool from './pool.js';
 import authRoutes from './routes/auth.js';
-import transferRoutes from './routes/transfers.js';
+import transferRoutes from './routes/transfer.js';
 import transactionRoutes from './routes/transactions.js';
 
 // Import simplified security middleware
