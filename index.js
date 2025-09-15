@@ -40,17 +40,24 @@ app.use(requestSizeLimiter);
 // CORS configuration
 
 // CORS configuration - Add the actual Vercel deployment URL
-const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:3000', 
-  'https://hawalasend.vercel.app',
-  'https://hawalasend-git-main-victor-kiptoos-projects.vercel.app',
-  'https://hawalasend-victor-kiptoos-projects.vercel.app',
-  'https://hawalasend-frontend-24nebhn4t-abhirsis-projects.vercel.app', // ADD THIS LINE
-  // Also add a wildcard pattern for any Vercel preview deployments
-  /^https:\/\/hawalasend.*\.vercel\.app$/
-].filter(Boolean);
-
-console.log('✅ Allowed Origins:', allowedOrigins);
+// Temporary fix - replace your CORS section with this:
+app.use(cors({ 
+  origin: function (origin, callback) {
+    // Allow all Vercel deployments and localhost
+    if (!origin || 
+        origin.includes('vercel.app') || 
+        origin.includes('localhost') ||
+        origin === 'https://hawalasend.vercel.app') {
+      return callback(null, true);
+    }
+    console.log(`🚫 CORS blocked origin: ${origin}`);
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  optionsSuccessStatus: 200
+}));
 
 app.use(cors({ 
   origin: function (origin, callback) {
