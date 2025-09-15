@@ -38,18 +38,42 @@ app.use(apiVersioning);
 app.use(requestSizeLimiter);
 
 // CORS configuration
+// Replace your CORS configuration section in index.js with this:
 
-// CORS configuration - Add the actual Vercel deployment URL
-// Temporary fix - replace your CORS section with this:
+// CORS configuration - Allow all Vercel deployments
+const allowedOrigins = [
+  'http://localhost:3000', 
+  'https://hawalasend.vercel.app'
+];
+
+console.log('✅ Allowed Origins:', allowedOrigins);
+
 app.use(cors({ 
   origin: function (origin, callback) {
-    // Allow all Vercel deployments and localhost
-    if (!origin || 
-        origin.includes('vercel.app') || 
-        origin.includes('localhost') ||
-        origin === 'https://hawalasend.vercel.app') {
+    // Always allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) {
       return callback(null, true);
     }
+    
+    // Allow all Vercel deployments with simple string matching
+    if (origin.includes('vercel.app')) {
+      console.log(`✅ CORS allowed Vercel origin: ${origin}`);
+      return callback(null, true);
+    }
+    
+    // Allow localhost for development
+    if (origin.includes('localhost')) {
+      console.log(`✅ CORS allowed localhost origin: ${origin}`);
+      return callback(null, true);
+    }
+    
+    // Allow specific production domains
+    if (allowedOrigins.includes(origin)) {
+      console.log(`✅ CORS allowed configured origin: ${origin}`);
+      return callback(null, true);
+    }
+    
+    // Block everything else
     console.log(`🚫 CORS blocked origin: ${origin}`);
     callback(new Error('Not allowed by CORS'));
   },
@@ -57,24 +81,6 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   optionsSuccessStatus: 200
-}));
-
-app.use(cors({ 
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      console.log(`🚫 CORS blocked origin: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  optionsSuccessStatus: 200 // Some legacy browsers choke on 204
 }));
 
 app.use(express.json({ limit: '10mb' }));
