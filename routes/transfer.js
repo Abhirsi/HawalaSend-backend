@@ -1,8 +1,9 @@
-// routes/transfers.js - Complete transfer functionality
+// routes/transfers.js - Complete transfer functionality with email notifications
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import pool from '../pool.js';
 import { authenticate } from '../middleware/authMiddleware.js';
+import { sendTransferConfirmation, sendRecipientNotification } from '../services/emailService.js';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -58,7 +59,7 @@ router.post('/send', authenticate, async (req, res) => {
     
     // Find recipient
     const recipientResult = await client.query(
-      'SELECT id, email, username FROM users WHERE LOWER(email) = LOWER($1)',
+      'SELECT id, email, username, first_name, last_name FROM users WHERE LOWER(email) = LOWER($1)',
       [recipient_email.trim()]
     );
     
@@ -108,6 +109,36 @@ router.post('/send', authenticate, async (req, res) => {
     await client.query('COMMIT');
     
     console.log(`Transfer successful: $${transferAmount} from user ${senderId} to user ${recipient.id}`);
+    
+    // Send email notifications (don't await to avoid blocking response)
+    const senderName = `${sender.first_name || ''} ${sender.last_name || ''}`.trim() || sender.username;
+    const recipientName = `${recipient.first_name || ''} ${recipient.last_name || ''}`.trim() || recipient.username;
+    
+    Promise.all([
+      sendTransferConfirmation(
+        sender.email,
+        senderName,
+        recipient.email,
+        transferAmount,
+        description || 'Money transfer',
+        transaction.id,
+        fee,
+        newBalance
+      ),
+      sendRecipientNotification(
+        recipient.email,
+        recipientName,
+        sender.email,
+        senderName,
+        transferAmount,
+        description || 'Money transfer'
+      )
+    ]).then(results => {
+      console.log('Email notifications sent:', results);
+    }).catch(error => {
+      console.error('Error sending notification emails:', error);
+      // Email failures should not affect transfer success
+    });
     
     res.json({
       success: true,
