@@ -176,36 +176,41 @@ router.get('/history', authenticate, async (req, res) => {
     const offset = (page - 1) * limit;
     
     console.log(`Fetching transfer history for user ${userId}`);
-    
+
+
     // Get transfers where user is sender or receiver
-    const transfers = await pool.query(`
-      SELECT 
-        t.id,
-        t.amount,
-        t.fee,
-        t.description,
-        t.status,
-        t.created_at,
-        t.completed_at,
-        CASE 
-          WHEN t.sender_id = $1 THEN 'sent'
-          ELSE 'received'
-        END as type,
-        CASE 
-          WHEN t.sender_id = $1 THEN r.email
-          ELSE s.email  
-        END as other_party_email,
-        CASE 
-          WHEN t.sender_id = $1 THEN r.username
-          ELSE s.username
-        END as other_party_username
-      FROM transactions t
-      JOIN users s ON t.sender_id = s.id
-      JOIN users r ON t.receiver_id = r.id
-      WHERE t.sender_id = $1 OR t.receiver_id = $1
-      ORDER BY t.created_at DESC
-      LIMIT $2 OFFSET $3
-    `, [userId, limit, offset]);
+const transfers = await pool.query(`
+  SELECT 
+    t.id,
+    t.amount,
+    t.fee,
+    t.description,
+    t.status,
+    t.created_at,
+    t.completed_at,
+    CASE 
+      WHEN t.sender_id = $1 THEN 'sent'
+      ELSE 'received'
+    END as type,
+    CASE 
+      WHEN t.sender_id = $1 THEN r.email
+      ELSE s.email  
+    END as other_party_email,
+    CASE 
+      WHEN t.sender_id = $1 THEN r.username
+      ELSE s.username
+    END as other_party_username,
+    CASE 
+      WHEN t.sender_id = $1 THEN CONCAT(r.first_name, ' ', r.last_name)
+      ELSE CONCAT(s.first_name, ' ', s.last_name)
+    END as other_party_name
+  FROM transactions t
+  JOIN users s ON t.sender_id = s.id
+  JOIN users r ON t.receiver_id = r.id
+  WHERE t.sender_id = $1 OR t.receiver_id = $1
+  ORDER BY t.created_at DESC
+  LIMIT $2 OFFSET $3
+`, [userId, limit, offset]);
     
     // Get total count
     const countResult = await pool.query(
