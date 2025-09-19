@@ -7,8 +7,7 @@ import transferRoutes from './routes/transfer.js';
 import transactionRoutes from './routes/transactions.js';
 import cookieParser from 'cookie-parser';
 
-// Add after other middleware
-app.use(cookieParser());
+
 // Import simplified security middleware
 import { 
   securityHeaders, 
@@ -39,6 +38,9 @@ app.use(generalRateLimit);
 app.use(sanitizeInput);
 app.use(apiVersioning);
 app.use(requestSizeLimiter);
+
+// Add after other middleware
+app.use(cookieParser());
 
 // CORS configuration
 // Replace your CORS configuration section in index.js with this:
