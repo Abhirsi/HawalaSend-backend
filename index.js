@@ -5,7 +5,10 @@ import pool from './pool.js';
 import authRoutes from './routes/auth.js';
 import transferRoutes from './routes/transfer.js';
 import transactionRoutes from './routes/transactions.js';
+import cookieParser from 'cookie-parser';
 
+// Add after other middleware
+app.use(cookieParser());
 // Import simplified security middleware
 import { 
   securityHeaders, 
