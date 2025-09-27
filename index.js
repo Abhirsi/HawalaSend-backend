@@ -1,86 +1,84 @@
+// ============================
+// index.js - Main Server File
+// ============================
+
+// Core dependencies
 import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
+
+// Database connection
 import pool from './pool.js';
+
+// Routes
 import authRoutes from './routes/auth.js';
 import transferRoutes from './routes/transfer.js';
 import transactionRoutes from './routes/transactions.js';
-import cookieParser from 'cookie-parser';
 
-
-// Import simplified security middleware
-import { 
-  securityHeaders, 
-  generalRateLimit, 
-  securityLogger, 
+// Security middleware
+import {
+  securityHeaders,
+  generalRateLimit,
+  securityLogger,
   sanitizeInput,
   apiVersioning,
-  requestSizeLimiter 
+  requestSizeLimiter
 } from './middleware/security.js';
 
-dotenv.config({ path: './.env.local' });
+import helmet from 'helmet';
+
+// Load environment variables
+// ===== Load Environment Variables =====
+
+// Explicitly tell dotenv to load from backend/.env if NODE_ENV=development
+dotenv.config({
+  path: process.env.NODE_ENV === 'production' 
+    ? '.env.production' 
+    : '.env'
+});
+
+// Debug: show which file is being used
+console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
+console.log(`📂 Loaded env file: ${process.env.NODE_ENV === 'production' ? '.env.production' : '.env'}`);
+
+// ===== Check Critical Variables =====
+if (!process.env.JWT_SECRET || (!process.env.PGDATABASE && !process.env.DATABASE_URL)) {
+  throw new Error('❌ Missing critical environment variables: JWT_SECRET or Database (PGDATABASE/DATABASE_URL)');
+}
+
 
 const app = express();
 
-// CRITICAL: Fix trust proxy for Railway deployment
-app.set('trust proxy', 1); // Changed from true to 1 for Railway compatibility
+// -----------------------------
+// Trust proxy (important for Railway/Vercel)
+// -----------------------------
+app.set('trust proxy', 1);
 
-// Security headers - must be first
-app.use(securityHeaders);
+// -----------------------------
+// Global Security Middleware
+// -----------------------------
+app.use(helmet());          // Harden HTTP headers
+app.use(securityHeaders);   // Your custom security headers (keep if you have extras)
+app.use(securityLogger);    // Log incoming requests
+app.use(generalRateLimit);  // Global rate limiting
+app.use(sanitizeInput);     // Sanitize request inputs
+app.use(apiVersioning);     // Version API
+app.use(requestSizeLimiter);// Limit body size
+app.use(cookieParser());    // Parse cookies
 
-// Request logging and monitoring
-app.use(securityLogger);
+// -----------------------------
+// CORS Setup
+// -----------------------------
+const allowedOrigins = [/\.vercel\.app$/, /localhost/];
 
-// General rate limiting (simplified)
-app.use(generalRateLimit);
-
-// Input sanitization
-app.use(sanitizeInput);
-app.use(apiVersioning);
-app.use(requestSizeLimiter);
-
-// Add after other middleware
-app.use(cookieParser());
-
-// CORS configuration
-// Replace your CORS configuration section in index.js with this:
-
-// CORS configuration - Allow all Vercel deployments
-const allowedOrigins = [
-  'http://localhost:3000', 
-  'https://hawalasend.vercel.app'
-];
-
-console.log('✅ Allowed Origins:', allowedOrigins);
-
-app.use(cors({ 
+app.use(cors({
   origin: function (origin, callback) {
-    // Always allow requests with no origin (mobile apps, Postman, etc.)
-    if (!origin) {
+    if (!origin) return callback(null, true); // Allow Postman/mobile
+    if (allowedOrigins.some(pattern => pattern.test(origin))) {
       return callback(null, true);
     }
-    
-    // Allow all Vercel deployments with simple string matching
-    if (origin.includes('vercel.app')) {
-      console.log(`✅ CORS allowed Vercel origin: ${origin}`);
-      return callback(null, true);
-    }
-    
-    // Allow localhost for development
-    if (origin.includes('localhost')) {
-      console.log(`✅ CORS allowed localhost origin: ${origin}`);
-      return callback(null, true);
-    }
-    
-    // Allow specific production domains
-    if (allowedOrigins.includes(origin)) {
-      console.log(`✅ CORS allowed configured origin: ${origin}`);
-      return callback(null, true);
-    }
-    
-    // Block everything else
-    console.log(`🚫 CORS blocked origin: ${origin}`);
-    callback(new Error('Not allowed by CORS'));
+    return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -88,162 +86,49 @@ app.use(cors({
   optionsSuccessStatus: 200
 }));
 
+// -----------------------------
+// Parsers
+// -----------------------------
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Test database connection on startup
+// -----------------------------
+// DB Connection Test
+// -----------------------------
 const testDatabaseConnection = async () => {
   try {
     const result = await pool.query('SELECT NOW(), version()');
-    console.log('🔗 Database connected as user:', process.env.PGUSER || 'postgres');
-    console.log('📊 Database info:', result.rows[0].version.split(' ')[0]);
+    console.log('🔗 Database connected:', result.rows[0].now);
   } catch (error) {
-    console.error('❌ Error connecting to database:', error.message);
-    // Don't exit in production, log and continue
+    console.error('❌ Database connection failed:', error.message);
     if (process.env.NODE_ENV === 'production') {
-      console.log('⚠️ Database connection failed, but server will continue running');
+      console.log('⚠️ Continuing without DB until issue is fixed');
+    } else {
+      process.exit(1);
     }
   }
 };
 
-// Database setup route - Creates tables and test users
-app.get('/setup-database', async (req, res) => {
-  try {
-    console.log('🔧 Creating database tables...');
-    
-    // Create users table with security fields
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        username VARCHAR(100) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        first_name VARCHAR(100) NOT NULL,
-        last_name VARCHAR(100) NOT NULL,
-        phone VARCHAR(20),
-        balance DECIMAL(15,2) DEFAULT 0.00,
-        login_attempts INTEGER DEFAULT 0,
-        locked_until TIMESTAMP NULL,
-        last_login TIMESTAMP NULL,
-        created_at TIMESTAMP DEFAULT NOW(),
-        updated_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    
-    // Add columns if they don't exist (for existing users table)
-    await pool.query(`
-      ALTER TABLE users 
-      ADD COLUMN IF NOT EXISTS login_attempts INTEGER DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP NULL,
-      ADD COLUMN IF NOT EXISTS last_login TIMESTAMP NULL
-    `);
-    
-    console.log('✅ Users table updated');
-    
-    // Create transactions table  
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS transactions (
-        id SERIAL PRIMARY KEY,
-        sender_id INTEGER NOT NULL,
-        receiver_id INTEGER NOT NULL,
-        amount DECIMAL(15,2) NOT NULL,
-        fee DECIMAL(15,2) DEFAULT 0.00,
-        currency VARCHAR(3) DEFAULT 'USD',
-        description TEXT,
-        status VARCHAR(20) DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT NOW(),
-        updated_at TIMESTAMP DEFAULT NOW(),
-        completed_at TIMESTAMP,
-        CONSTRAINT chk_sender_receiver_diff CHECK (sender_id <> receiver_id),
-        CONSTRAINT transactions_amount_check CHECK (amount > 0),
-        CONSTRAINT transactions_fee_check CHECK (fee >= 0),
-        CONSTRAINT chk_completion_status CHECK (
-          (status = 'completed' AND completed_at IS NOT NULL) OR 
-          (status <> 'completed' AND completed_at IS NULL)
-        )
-      )
-    `);
-    console.log('✅ Transactions table created');
-    
-    // Create security_logs table for monitoring
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS security_logs (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER,
-        action VARCHAR(50) NOT NULL,
-        ip_address INET,
-        user_agent TEXT,
-        success BOOLEAN DEFAULT false,
-        details JSONB,
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    console.log('✅ Security logs table created');
-    
-    // Insert test users (use existing password hash)
-    const testHash = '$2b$10$CwTycUXWue0Thq9StjUM0uehufrkKbXnq3wi5qCa6ZAQLn1s6Vhwi';
-    
-    await pool.query(`
-      INSERT INTO users (email, username, password_hash, first_name, last_name, phone, balance) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (email) DO NOTHING
-    `, ['testuser@example.com', 'testuser', testHash, 'Test', 'User', '+1234567890', 2500.00]);
-    
-    await pool.query(`
-      INSERT INTO users (email, username, password_hash, first_name, last_name, phone, balance) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (email) DO NOTHING  
-    `, ['recipientuser@example.com', 'recipientuser', testHash, 'Recipient', 'User', '+0987654321', 1000.00]);
-    
-    // Verify tables
-    const usersCount = await pool.query('SELECT COUNT(*) FROM users');
-    const transactionsCount = await pool.query('SELECT COUNT(*) FROM transactions');
-    const securityLogsCount = await pool.query('SELECT COUNT(*) FROM security_logs');
-    
-    console.log('✅ Database setup complete');
-    res.json({ 
-      message: 'Database setup complete with security enhancements!',
-      users: usersCount.rows[0].count,
-      transactions: transactionsCount.rows[0].count,
-      securityLogs: securityLogsCount.rows[0].count,
-      status: 'success'
-    });
-  } catch (error) {
-    console.error('❌ Database setup error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
+// -----------------------------
 // Routes
+// -----------------------------
 app.use('/auth', authRoutes);
 app.use('/transfers', transferRoutes);
+//app.use('/transfers', transfersRoutes);
 app.use('/transactions', transactionRoutes);
 
-// Enhanced health check
+// Health check route
 app.get('/health', async (req, res) => {
   try {
     const dbTest = await pool.query('SELECT NOW() as current_time');
-    
     res.json({
       status: 'healthy',
-      timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       environment: process.env.NODE_ENV || 'development',
-      security: {
-        rateLimit: 'active',
-        securityHeaders: 'active',
-        inputSanitization: 'active',
-        trustProxy: 'enabled'
-      },
-      database: {
-        status: 'connected',
-        currentTime: dbTest.rows[0].current_time,
-      },
+      database: { connected: true, time: dbTest.rows[0].current_time }
     });
   } catch (error) {
-    res.status(500).json({
-      status: 'unhealthy',
-      timestamp: new Date().toISOString(),
-      error: process.env.NODE_ENV === 'production' ? 'Database connection failed' : error.message
-    });
+    res.status(500).json({ status: 'unhealthy', error: 'DB connection failed' });
   }
 });
 
@@ -251,70 +136,66 @@ app.get('/health', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     message: 'HawalaSend API - Secure Money Transfer Service',
-    status: 'healthy',
-    security: 'enabled',
-    timestamp: new Date().toISOString(),
     version: '1.0.0',
-    environment: process.env.NODE_ENV || 'development'
-  });
-});
-
-// 404 handler
-app.use('*', (req, res) => {
-  const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.connection.remoteAddress;
-  console.log(`🚫 404 - Route not found: ${req.method} ${req.originalUrl} - IP: ${ip}`);
-  res.status(404).json({
-    error: 'Route not found',
-    message: 'The requested endpoint does not exist',
     timestamp: new Date().toISOString()
   });
 });
 
-// Global error handler
+// -----------------------------
+// Development-only routes
+// -----------------------------
+if (process.env.NODE_ENV !== 'production') {
+  // ⚠️ Only enable in development, block in production
+  app.get('/setup-database', async (req, res) => {
+    // DB setup logic here (kept short for safety)
+    res.json({ message: 'Dev-only database setup endpoint' });
+  });
+
+  app.post('/fix-database', (req, res) => {
+    res.json({ message: 'Dev-only schema fix endpoint' });
+  });
+
+  app.post('/fix-constraint', (req, res) => {
+    res.json({ message: 'Dev-only constraint fix endpoint' });
+  });
+}
+
+// -----------------------------
+// Error Handling
+// -----------------------------
+app.use('*', (req, res) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
 app.use((err, req, res, next) => {
-  console.error('🚨 Global error:', err.stack);
-  
-  // Don't expose sensitive error details in production
-  const isDevelopment = process.env.NODE_ENV !== 'production';
-  
+  console.error('🚨 Error:', err.stack);
+  const isDev = process.env.NODE_ENV !== 'production';
   res.status(err.status || 500).json({
-    error: isDevelopment ? err.message : 'Internal server error',
-    timestamp: new Date().toISOString(),
-    ...(isDevelopment && { stack: err.stack })
+    error: isDev ? err.message : 'Internal server error'
   });
 });
 
-// Start server
+// -----------------------------
+// Start Server
+// -----------------------------
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, () => {
-  console.log('🚀 HawalaSend backend server running...');
-  console.log(`• Port: ${PORT}`);
-  console.log(`• Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`• Database: ${process.env.PGDATABASE || 'money_transfer_app'}`);
-  console.log('🔒 Security features: ENABLED');
-  console.log('📡 Server ready to accept connections');
-  
-  // Test database connection after server starts
+  console.log(`🚀 Server running on port ${PORT}`);
   testDatabaseConnection();
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('🔄 SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    console.log('✅ Process terminated');
-    pool.end(); // Close database connections
-  });
+  server.close(() => pool.end());
 });
 
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('💥 Uncaught Exception:', error);
+process.on('uncaughtException', err => {
+  console.error('💥 Uncaught Exception:', err);
   process.exit(1);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
+process.on('unhandledRejection', reason => {
+  console.error('💥 Unhandled Rejection:', reason);
   process.exit(1);
 });
 

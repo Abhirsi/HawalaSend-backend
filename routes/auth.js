@@ -1,290 +1,233 @@
-// backend/routes/auth.js - Updated with HttpOnly cookies
+// ============================
+// routes/auth.js - Auth Routes
+// ============================
+
 import express from 'express';
-import bcrypt from 'bcryptjs';
+import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import rateLimit from 'express-rate-limit';
 import pool from '../pool.js';
+import { loginRateLimit, validateLogin } from '../middleware/security.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-const JWT_EXPIRES_IN = '7d'; // 7 days
-const COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
+const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_EXPIRES = process.env.JWT_EXPIRES_IN
 
-// Rate limiting for login attempts
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 requests per windowMs
-  message: {
-    error: 'Too many login attempts, please try again after 15 minutes'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
 
-// Helper function to set secure cookie
-const setAuthCookie = (res, token) => {
-  const cookieOptions = {
-    httpOnly: true, // Cannot be accessed via JavaScript
-    secure: process.env.NODE_ENV === 'production', // HTTPS only in production
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // CSRF protection
-    maxAge: COOKIE_MAX_AGE, // 7 days
-    path: '/' // Available on all paths
-  };
 
-  res.cookie('authToken', token, cookieOptions);
-};
+// -----------------------------
+// Helper: log security events
+// -----------------------------
+async function logSecurityEvent(userId, action, ip, userAgent, success, details = {}) {
+  await pool.query(
+  `INSERT INTO security_logs (user_id, action, ip_address, user_agent, success, details) 
+   VALUES ($1,$2,$3,$4,$5,$6)`,
+  [userId, action, ip, userAgent, success, JSON.stringify(details)]
+);
+}
 
-// Helper function to clear auth cookie
-const clearAuthCookie = (res) => {
-  const cookieOptions = {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    path: '/'
-  };
+// -----------------------------
+// Helper: generate access token
+// -----------------------------
+function generateToken(user) {
+  return jwt.sign(
+    { id: user.id, email: user.email, username: user.username },
+    JWT_SECRET,
+     { expiresIn: JWT_EXPIRES || '15m' }
+  );
+}
 
-  res.clearCookie('authToken', cookieOptions);
-};
+// -----------------------------
+// Login Route
+// -----------------------------
+router.post('/login', loginRateLimit, validateLogin, async (req, res) => {
+  const { email, password } = req.body;
+  const ip = req.ip;
+  const ua = req.headers['user-agent'];
 
-// POST /auth/register - User registration
-router.post('/register', async (req, res) => {
-  const client = await pool.connect();
-  
   try {
-    const { email, password, firstName, lastName, phoneNumber } = req.body;
-
-    // Validate required fields
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
-    }
-
-    // Check if user already exists
-    const existingUser = await client.query(
-      'SELECT id FROM users WHERE LOWER(email) = LOWER($1)',
-      [email.trim()]
-    );
-
-    if (existingUser.rows.length > 0) {
-      return res.status(400).json({ error: 'Email already registered' });
-    }
-
-    // Hash password
-    const saltRounds = 12;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
-
-    // Create user
-    const result = await client.query(
-      `INSERT INTO users (email, password, first_name, last_name, phone_number, balance, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, 1000.00, NOW(), NOW())
-       RETURNING id, email, first_name, last_name, phone_number, balance, created_at`,
-      [email.trim().toLowerCase(), hashedPassword, firstName || '', lastName || '', phoneNumber || '']
-    );
-
-    const user = result.rows[0];
-
-    // Generate JWT token
-    const token = jwt.sign(
-      {
-        id: user.id,
-        email: user.email
-      },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN }
-    );
-
-    // Set HttpOnly cookie
-    setAuthCookie(res, token);
-
-    // Return user data (no token in response body)
-    res.status(201).json({
-      message: 'Registration successful',
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        phoneNumber: user.phone_number,
-        balance: parseFloat(user.balance),
-        createdAt: user.created_at
-      }
-    });
-
-    console.log(`User registered successfully: ${user.email} (ID: ${user.id})`);
-
-  } catch (error) {
-    console.error('Registration error:', error);
-    
-    if (error.code === '23505') { // Unique violation
-      res.status(400).json({ error: 'Email already registered' });
-    } else {
-      res.status(500).json({ error: 'Registration failed. Please try again.' });
-    }
-  } finally {
-    client.release();
-  }
-});
-
-// POST /auth/login - User login with HttpOnly cookies
-router.post('/login', loginLimiter, async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    console.log(`Login attempt for: ${email}`);
-
-    // Validate input
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
-    }
-
-    // Find user
-    const result = await pool.query(
-      'SELECT id, email, password, first_name, last_name, phone_number, balance, created_at FROM users WHERE LOWER(email) = LOWER($1)',
-      [email.trim()]
-    );
-
-    const user = result.rows[0];
+    const userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const user = userResult.rows[0];
     if (!user) {
-      console.log(`Login failed - User not found: ${email}`);
-      return res.status(401).json({ error: 'Invalid email or password' });
+      await logSecurityEvent(null, 'login_failed', ip, ua, false, { reason: 'no_user' });
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Check account lock
+    if (user.locked_until && new Date(user.locked_until) > new Date()) {
+      await logSecurityEvent(user.id, 'account_locked', ip, ua, false);
+      return res.status(423).json({ error: 'Account locked' });
     }
 
     // Verify password
-    const passwordMatch = await bcrypt.compare(password, user.password);
-    if (!passwordMatch) {
-      console.log(`Login failed - Invalid password for: ${email}`);
-      return res.status(401).json({ error: 'Invalid email or password' });
-    }
+    // Verify password
+const hash = user.password_hash || user.password;
+if (!hash) {
+  await logSecurityEvent(user.id, 'login_failed', ip, ua, false, { reason: 'no_password_hash' });
+  return res.status(401).json({ error: 'Invalid credentials' });
+}
 
-    // Generate JWT token
-    const token = jwt.sign(
-      {
-        id: user.id,
-        email: user.email
-      },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN }
-    );
+const match = await bcrypt.compare(password, hash);
 
-    // Set HttpOnly cookie
-    setAuthCookie(res, token);
 
-    // Update last login
-    await pool.query(
-      'UPDATE users SET updated_at = NOW() WHERE id = $1',
-      [user.id]
-    );
+    // Reset login attempts
+    await pool.query('UPDATE users SET login_attempts = 0, last_login = NOW() WHERE id = $1', [user.id]);
 
-    // Return user data (no token in response body)
-    res.json({
+    const token = generateToken(user);
+    await logSecurityEvent(user.id, 'login_success', ip, ua, true);
+
+    // Return only safe data
+    res.json({ 
       message: 'Login successful',
-      user: {
-        id: user.id,
-        email: user.email,
-        username: user.email, // Keep for backward compatibility
-        firstName: user.first_name,
-        lastName: user.last_name,
-        phoneNumber: user.phone_number,
-        balance: parseFloat(user.balance)
-      }
+      token,
+      user: { id: user.id, email: user.email, username: user.username }
     });
-
-    console.log(`User logged in successfully: ${user.email}`);
-
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Login failed. Please try again.' });
+  } catch (err) {
+    console.error('❌ Login error:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// POST /auth/logout - User logout
-router.post('/logout', (req, res) => {
-  try {
-    // Clear the HttpOnly cookie
-    clearAuthCookie(res);
-    
-    res.json({ message: 'Logout successful' });
-    console.log('User logged out successfully');
-  } catch (error) {
-    console.error('Logout error:', error);
-    res.status(500).json({ error: 'Logout failed' });
-  }
-});
+// -----------------------------
+// Register Route
+// -----------------------------
+router.post('/register', async (req, res) => {
+  const { email, username, password, first_name, last_name, phone } = req.body;
+  const ip = req.ip;
+  const ua = req.headers['user-agent'];
 
-// GET /auth/me - Get current user (using cookie)
-router.get('/me', async (req, res) => {
   try {
-    const token = req.cookies?.authToken;
-    
-    if (!token) {
-      return res.status(401).json({ error: 'Not authenticated' });
+    const exists = await pool.query('SELECT 1 FROM users WHERE email=$1 OR username=$2', [email, username]);
+    if (exists.rows.length > 0) {
+      return res.status(400).json({ error: 'Email or username already exists' });
     }
 
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Get fresh user data
+    const hash = await bcrypt.hash(password, 12);
     const result = await pool.query(
-      'SELECT id, email, first_name, last_name, phone_number, balance FROM users WHERE id = $1',
-      [decoded.id]
+      `INSERT INTO users (email,username,password_hash,first_name,last_name,phone) 
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id,email,username`,
+      [email, username, hash, first_name, last_name, phone]
     );
 
-    const user = result.rows[0];
-    if (!user) {
-      clearAuthCookie(res);
-      return res.status(401).json({ error: 'User not found' });
-    }
+    const newUser = result.rows[0];
+    const token = generateToken(newUser);
 
-    res.json({
+    await logSecurityEvent(newUser.id, 'register_success', ip, ua, true);
+
+    res.status(201).json({
+      message: 'User registered',
+      token,
       user: {
-        id: user.id,
-        email: user.email,
-        username: user.email,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        phoneNumber: user.phone_number,
-        balance: parseFloat(user.balance)
-      }
-    });
-
-  } catch (error) {
-    console.error('Auth check error:', error);
-    clearAuthCookie(res);
-    res.status(401).json({ error: 'Invalid token' });
+        id: newUser.id,
+        email: newUser.email,
+        username: newUser.username,
+        firstName: newUser.first_name || null,
+        lastName: newUser.last_name || null
+      }  
+  });
+  } catch (err) {
+    console.error('❌ Register error:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// POST /auth/refresh - Refresh token
-router.post('/refresh', async (req, res) => {
+// Add these routes to your existing auth.js file
+
+// Forgot Password Route
+router.post('/forgot-password', async (req, res) => {
   try {
-    const token = req.cookies?.authToken;
+    const { email } = req.body;
     
-    if (!token) {
-      return res.status(401).json({ error: 'No token provided' });
+    // Check if user exists
+    const result = await pool.query('SELECT id, first_name FROM users WHERE email = $1', [email]);
+    
+    if (result.rows.length === 0) {
+      // Don't reveal that email doesn't exist for security
+      return res.status(200).json({
+        message: 'If an account with that email exists, we have sent a password reset link.',
+        success: true
+      });
     }
-
-    // Verify current token
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = result.rows[0];
+    // TODO: Implement secure token generation + email service
+    const resetToken = jwt.sign({ id: user.id, email: email }, JWT_SECRET, { expiresIn: '1h' });
+    // TODO: Store token in password_reset_tokens table with expiry
+    // TODO: Send email with reset link (e.g., http://localhost:3000/reset-password?token=${resetToken})
+    // For now, just return success (you can add email logic later)
+    res.status(200).json({
+      message: 'Password reset link has been sent to your email address.',
+      success: true
+    });
     
-    // Generate new token
-    const newToken = jwt.sign(
-      {
-        id: decoded.id,
-        email: decoded.email
-      },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN }
-    );
-
-    // Set new HttpOnly cookie
-    setAuthCookie(res, newToken);
-
-    res.json({ message: 'Token refreshed successfully' });
-
   } catch (error) {
-    console.error('Token refresh error:', error);
-    clearAuthCookie(res);
-    res.status(401).json({ error: 'Token refresh failed' });
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: 'Unable to process password reset request.' });
+  }
+});
+
+// Reset Password Route 
+
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    
+    if (!token || !newPassword) {
+      return res.status(400).json({ error: 'Token and new password are required' });
+    }
+    
+    // TODO: Verify token exists in password_reset_tokens and not expired
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      return res.status(400).json({ error: 'Invalid or expired token' });
+    }
+    
+    const hash = await bcrypt.hash(newPassword, 12);
+    await pool.query(
+      'UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2',
+      [hash, decoded.id]
+    );
+    
+    // TODO: Delete token from password_reset_tokens after use
+    res.status(200).json({
+      message: 'Password has been successfully reset.',
+      success: true
+    });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ error: 'Unable to reset password.' });
   }
 });
 
 export default router;
+
+// -----------------------------
+// Get Current User Route (protected)
+// -----------------------------
+router.get('/me', authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, email, username, first_name, last_name FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    const user = result.rows[0];
+    res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        firstName: user.first_name,
+        lastName: user.last_name
+      }
+    });
+  } catch (err) {
+    console.error('Auth check error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
