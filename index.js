@@ -1,81 +1,64 @@
 // ============================
-// index.js - Main Server File
+// index.js - Main Backend Server
 // ============================
 
-// Core dependencies
-import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet'; // Adds security headers
+import morgan from 'morgan'; // Logs requests
+import dotenv from 'dotenv';
+import pool from './pool.js'; // PostgreSQL connection pool
+import authRoutes from './routes/auth.js'; // Authentication routes
+import transferRoutes from './routes/transfer.js'; // Money transfer routes
 import cookieParser from 'cookie-parser';
+import { sanitizeInput, generalRateLimit } from './middleware/security.js'; // Add your security file
 
-// Database connection
-import pool from './pool.js';
-
-// Routes
-import authRoutes from './routes/auth.js';
-import transferRoutes from './routes/transfer.js';
-import transactionRoutes from './routes/transactions.js';
-
-// Security middleware
-import {
-  securityHeaders,
-  generalRateLimit,
-  securityLogger,
-  sanitizeInput,
-  apiVersioning,
-  requestSizeLimiter
-} from './middleware/security.js';
-
-import helmet from 'helmet';
-
+// -----------------------------
 // Load environment variables
-// ===== Load Environment Variables =====
+// -----------------------------
+dotenv.config();
 
-// Explicitly tell dotenv to load from backend/.env if NODE_ENV=development
-dotenv.config({
-  path: process.env.NODE_ENV === 'production' 
-    ? '.env.production' 
-    : '.env'
-});
-
-// Debug: show which file is being used
-console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
+// Ensure critical env variables exist
+if (!process.env.JWT_SECRET || !process.env.PGDATABASE) {
+  throw new Error('❌ Missing critical environment variables: JWT_SECRET or PGDATABASE');
+}
+console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 console.log(`📂 Loaded env file: ${process.env.NODE_ENV === 'production' ? '.env.production' : '.env'}`);
 
-// ===== Check Critical Variables =====
-if (!process.env.JWT_SECRET || (!process.env.PGDATABASE && !process.env.DATABASE_URL)) {
-  throw new Error('❌ Missing critical environment variables: JWT_SECRET or Database (PGDATABASE/DATABASE_URL)');
-}
-
-
+// -----------------------------
+// Initialize Express app
+// -----------------------------
 const app = express();
 
 // -----------------------------
-// Trust proxy (important for Railway/Vercel)
+// Middleware setup
 // -----------------------------
-app.set('trust proxy', 1);
+app.use(helmet()); // Protects against common attacks
+app.use(express.json()); // Parse JSON request body
+app.use(morgan('dev')); // Log requests in development
+app.use(cookieParser()); // Parse cookies for credentials
+app.use(sanitizeInput); // Prevent XSS/SQL injection
+app.use(generalRateLimit); // Protect against brute force
 
 // -----------------------------
-// Global Security Middleware
+// Configure CORS (frontend access control)
 // -----------------------------
-app.use(helmet());          // Harden HTTP headers
-app.use(securityHeaders);   // Your custom security headers (keep if you have extras)
-app.use(securityLogger);    // Log incoming requests
-app.use(generalRateLimit);  // Global rate limiting
-app.use(sanitizeInput);     // Sanitize request inputs
-app.use(apiVersioning);     // Version API
-app.use(requestSizeLimiter);// Limit body size
-app.use(cookieParser());    // Parse cookies
-
-// -----------------------------
-// CORS Setup
-// -----------------------------
-const allowedOrigins = [/\.vercel\.app$/, /localhost/];
+const allowedOrigins = [
+  'http://localhost:3000',              // Local dev frontend
+  'https://localhost:3000',             // Secure local dev
+  /\.vercel\.app$/                      // Any deployed Vercel frontend
+];
 
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true); // Allow Postman/mobile
-    if (allowedOrigins.some(pattern => pattern.test(origin))) {
+    if (!origin) return callback(null, true); // Allow Postman/mobile clients
+    if (
+      allowedOrigins.some(pattern =>
+        typeof pattern === 'string'
+          ? pattern === origin
+          : pattern.test(origin)
+      )
+    ) {
       return callback(null, true);
     }
     return callback(new Error('Not allowed by CORS'));
@@ -87,116 +70,78 @@ app.use(cors({
 }));
 
 // -----------------------------
-// Parsers
-// -----------------------------
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// -----------------------------
-// DB Connection Test
-// -----------------------------
-const testDatabaseConnection = async () => {
-  try {
-    const result = await pool.query('SELECT NOW(), version()');
-    console.log('🔗 Database connected:', result.rows[0].now);
-  } catch (error) {
-    console.error('❌ Database connection failed:', error.message);
-    if (process.env.NODE_ENV === 'production') {
-      console.log('⚠️ Continuing without DB until issue is fixed');
-    } else {
-      process.exit(1);
-    }
-  }
-};
-
-// -----------------------------
 // Routes
 // -----------------------------
-app.use('/auth', authRoutes);
-app.use('/transfers', transferRoutes);
-//app.use('/transfers', transfersRoutes);
-app.use('/transactions', transactionRoutes);
+app.use('/auth', authRoutes);        // Authentication endpoints
+app.use('/transfers', transferRoutes); // Money transfer endpoints
 
-// Health check route
+// Health check (useful for monitoring / Vercel probes)
 app.get('/health', async (req, res) => {
   try {
-    const dbTest = await pool.query('SELECT NOW() as current_time');
-    res.json({
-      status: 'healthy',
-      uptime: process.uptime(),
-      environment: process.env.NODE_ENV || 'development',
-      database: { connected: true, time: dbTest.rows[0].current_time }
-    });
-  } catch (error) {
-    res.status(500).json({ status: 'unhealthy', error: 'DB connection failed' });
+    await pool.query('SELECT NOW()'); // Simple DB check
+    res.json({ status: 'ok', database: 'connected' });
+  } catch (err) {
+    res.status(500).json({ status: 'error', database: 'disconnected' });
   }
 });
 
-// Root route
-app.get('/', (req, res) => {
-  res.json({
-    message: 'HawalaSend API - Secure Money Transfer Service',
-    version: '1.0.0',
-    timestamp: new Date().toISOString()
-  });
-});
-
-// -----------------------------
-// Development-only routes
-// -----------------------------
-if (process.env.NODE_ENV !== 'production') {
-  // ⚠️ Only enable in development, block in production
+// Development-only routes (never exposed in production!)
+if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
   app.get('/setup-database', async (req, res) => {
-    // DB setup logic here (kept short for safety)
     res.json({ message: 'Dev-only database setup endpoint' });
   });
-
   app.post('/fix-database', (req, res) => {
     res.json({ message: 'Dev-only schema fix endpoint' });
   });
-
   app.post('/fix-constraint', (req, res) => {
     res.json({ message: 'Dev-only constraint fix endpoint' });
   });
 }
 
 // -----------------------------
-// Error Handling
+// Error handling middleware
 // -----------------------------
-app.use('*', (req, res) => {
-  res.status(404).json({ error: 'Route not found' });
-});
-
 app.use((err, req, res, next) => {
-  console.error('🚨 Error:', err.stack);
+  console.error('❌ Server error:', err.stack); // Full stack in dev
   const isDev = process.env.NODE_ENV !== 'production';
-  res.status(err.status || 500).json({
+  res.status(500).json({
     error: isDev ? err.message : 'Internal server error'
   });
 });
 
 // -----------------------------
-// Start Server
+// Start server
 // -----------------------------
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5000; // Vercel provides PORT dynamically
 const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   testDatabaseConnection();
 });
 
+const testDatabaseConnection = async () => {
+  try {
+    const result = await pool.query('SELECT NOW(), version()');
+    console.log('🔗 Database connected:', result.rows[0].now);
+  } catch (error) {
+    console.error('❌ Database connection failed:', error.message);
+    process.exit(1); // Exit on failure in any env
+  }
+};
+
+// -----------------------------
 // Graceful shutdown
+// -----------------------------
 process.on('SIGTERM', () => {
-  server.close(() => pool.end());
+  console.log('🛑 SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    pool.end(err => {
+      if (err) console.error('❌ Error closing DB pool:', err);
+      process.exit(0);
+    });
+  });
 });
 
 process.on('uncaughtException', err => {
-  console.error('💥 Uncaught Exception:', err);
-  process.exit(1);
+  console.error('❌ Uncaught exception:', err);
+  process.exit(1); // Exit immediately (avoid unknown state)
 });
-
-process.on('unhandledRejection', reason => {
-  console.error('💥 Unhandled Rejection:', reason);
-  process.exit(1);
-});
-
-export default app;
