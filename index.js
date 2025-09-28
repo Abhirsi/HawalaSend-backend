@@ -6,7 +6,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet'; // Adds security headers
 import morgan from 'morgan'; // Logs requests
-import dotenv from 'dotenv';
+import { config } from 'dotenv'; // Named import for dotenv
 import pool from './pool.js'; // PostgreSQL connection pool
 import authRoutes from './routes/auth.js'; // Authentication routes
 import transferRoutes from './routes/transfer.js'; // Money transfer routes
@@ -16,14 +16,15 @@ import { sanitizeInput, generalRateLimit } from './middleware/security.js'; // A
 // -----------------------------
 // Load environment variables
 // -----------------------------
-dotenv.config();
+config({ path: './.env' }); // Specify the .env file location
 
 // Ensure critical env variables exist
-if (!process.env.JWT_SECRET || !process.env.PGDATABASE) {
-  throw new Error('❌ Missing critical environment variables: JWT_SECRET or PGDATABASE');
+if (!process.env.JWT_SECRET || (!process.env.PGDATABASE && !process.env.DATABASE_URL)) {
+  throw new Error('❌ Missing critical environment variables: JWT_SECRET or (PGDATABASE or DATABASE_URL)');
 }
 console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 console.log(`📂 Loaded env file: ${process.env.NODE_ENV === 'production' ? '.env.production' : '.env'}`);
+console.log(`📋 Env check: JWT_SECRET=${!!process.env.JWT_SECRET}, DATABASE_URL=${!!process.env.DATABASE_URL}`);
 
 // -----------------------------
 // Initialize Express app
@@ -101,6 +102,9 @@ if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
 // -----------------------------
 // Error handling middleware
 // -----------------------------
+app.use((req, res) => { // 404 handler
+  res.status(404).json({ error: 'Route not found' });
+});
 app.use((err, req, res, next) => {
   console.error('❌ Server error:', err.stack); // Full stack in dev
   const isDev = process.env.NODE_ENV !== 'production';
@@ -113,10 +117,13 @@ app.use((err, req, res, next) => {
 // Start server
 // -----------------------------
 const PORT = process.env.PORT || 5000; // Vercel provides PORT dynamically
-const server = app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  testDatabaseConnection();
-});
+const startServer = async () => {
+  await testDatabaseConnection();
+  const server = app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+  });
+  return server;
+};
 
 const testDatabaseConnection = async () => {
   try {
@@ -127,6 +134,8 @@ const testDatabaseConnection = async () => {
     process.exit(1); // Exit on failure in any env
   }
 };
+
+const server = startServer();
 
 // -----------------------------
 // Graceful shutdown
