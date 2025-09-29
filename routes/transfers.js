@@ -11,7 +11,7 @@ const router = express.Router();
 // -----------------------------
 // POST /transfers - Create a transfer
 // -----------------------------
-router.post('/', authenticate, async (req, res) => {
+router.post('/send', authenticate, async (req, res) => {
   const { receiver_id, amount, description } = req.body;
   const sender_id = req.user.id;
 
@@ -64,7 +64,7 @@ router.post('/', authenticate, async (req, res) => {
 // -----------------------------
 // GET /transfers - List user’s transfers
 // -----------------------------
-router.get('/', authenticate, async (req, res) => {
+router.get('/history', authenticate, async (req, res) => {
   const userId = req.user.id;
   try {
     const result = await pool.query(
