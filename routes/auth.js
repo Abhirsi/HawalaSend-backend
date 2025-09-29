@@ -230,3 +230,12 @@ router.get('/me', authenticate, async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+router.post('/logout', (req, res) => {
+  res.clearCookie('token', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
+  });
+  res.json({ message: 'Logged out successfully' });
+});
