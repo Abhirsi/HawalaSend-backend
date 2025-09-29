@@ -19,8 +19,9 @@ import { sanitizeInput, generalRateLimit } from './middleware/security.js'; // A
 config({ path: './.env' }); // Specify the .env file location
 
 // Ensure critical env variables exist
-if (!process.env.JWT_SECRET || (!process.env.PGDATABASE && !process.env.DATABASE_URL)) {
-  throw new Error('❌ Missing critical environment variables: JWT_SECRET or (PGDATABASE or DATABASE_URL)');
+  
+if (!process.env.JWT_SECRET || !process.env.DATABASE_URL) {
+  throw new Error('❌ Missing critical environment variables: JWT_SECRET or DATABASE_URL');
 }
 console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 console.log(`📂 Loaded env file: ${process.env.NODE_ENV === 'production' ? '.env.production' : '.env'}`);
