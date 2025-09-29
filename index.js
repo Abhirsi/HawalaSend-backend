@@ -75,8 +75,8 @@ app.use(cors({
 // Routes
 // -----------------------------
 app.use('/auth', authRoutes);        // Authentication endpoints
-app.use('/transfers', transferRoutes); // Money transfer endpoints
-
+//app.use('/transfer', transferRoutes); // Money transfer endpoints
+app.use('/transfers', transferRoutes); // Money transfer endpoints (plural)
 // Health check (useful for monitoring / Vercel probes)
 app.get('/health', async (req, res) => {
   try {
