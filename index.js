@@ -9,7 +9,7 @@ import morgan from 'morgan'; // Logs requests
 import { config } from 'dotenv'; // Named import for dotenv
 import pool from './pool.js'; // PostgreSQL connection pool
 import authRoutes from './routes/auth.js'; // Authentication routes
-import transferRoutes from './routes/transfer.js'; // Money transfer routes
+import transferRoutes from './routes/transfers.js'; // Money transfer routes
 import cookieParser from 'cookie-parser';
 import { sanitizeInput, generalRateLimit } from './middleware/security.js'; // Add your security file
 
@@ -75,8 +75,7 @@ app.use(cors({
 // Routes
 // -----------------------------
 app.use('/auth', authRoutes);        // Authentication endpoints
-app.use('/transfer', transferRoutes); // Money transfer endpoints
-//app.use('/transfers', transferRoutes); // Money transfer endpoints (plural)
+app.use('/transfers', transferRoutes); // Money transfer endpoints
 // Health check (useful for monitoring / Vercel probes)
 app.get('/health', async (req, res) => {
   try {

@@ -60,7 +60,6 @@ router.post('/login', loginRateLimit, validateLogin, async (req, res) => {
     }
 
     // Verify password
-    // Verify password
 const hash = user.password_hash || user.password;
 if (!hash) {
   await logSecurityEvent(user.id, 'login_failed', ip, ua, false, { reason: 'no_password_hash' });
