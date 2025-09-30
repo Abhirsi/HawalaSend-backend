@@ -38,6 +38,7 @@ function generateToken(user) {
 // -----------------------------
 // Login Route
 // -----------------------------
+
 router.post('/login', loginRateLimit, validateLogin, async (req, res) => {
   const { email, password } = req.body;
   const ip = req.ip;
@@ -77,22 +78,22 @@ router.post('/login', loginRateLimit, validateLogin, async (req, res) => {
     await logSecurityEvent(user.id, 'login_success', ip, ua, true);
 
     // ✅ CHANGE: Token is only sent as httpOnly cookie, not in body
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 24 * 60 * 60 * 1000 // 24 hours
-    });
+res.cookie('token', token, {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+  maxAge: 24 * 60 * 60 * 1000 // 24 hours
+});
 
-    // ✅ No token in JSON, only return user data
-    res.json({
-      message: 'Login successful',
-      user: { id: user.id, email: user.email, username: user.username }
-    });
-  } catch (err) {
-    console.error('❌ Login error:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
+// ✅ No token in JSON, only return user data
+res.json({
+  message: 'Login successful',
+  user: { id: user.id, email: user.email, username: user.username }
+});
+} catch (err) {
+  console.error('❌ Login error:', err);
+  res.status(500).json({ error: 'Server error' });
+}
 });
 
 // -----------------------------
