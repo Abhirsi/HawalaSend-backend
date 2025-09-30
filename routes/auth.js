@@ -133,13 +133,7 @@ router.post('/register', async (req, res) => {
     // ✅ CHANGE: Removed token from JSON response
     res.status(201).json({
       message: 'User registered',
-      user: {
-        id: newUser.id,
-        email: newUser.email,
-        username: newUser.username,
-        firstName: newUser.first_name || null,
-        lastName: newUser.last_name || null
-      }
+      user: { }
     });
   } catch (err) {
     console.error('❌ Register error:', err);
