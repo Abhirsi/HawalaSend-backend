@@ -59,7 +59,7 @@ router.post('/login', loginRateLimit, validateLogin, async (req, res) => {
     }
 
     // Verify password
-    const hash = user.password_hash || user.password;
+    const hash = user.password;
     if (!hash) {
       await logSecurityEvent(user.id, 'login_failed', ip, ua, false, { reason: 'no_password_hash' });
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -112,7 +112,7 @@ router.post('/register', async (req, res) => {
 
     const hash = await bcrypt.hash(password, 12);
     const result = await pool.query(
-      `INSERT INTO users (email,username,password_hash,first_name,last_name,phone) 
+      `INSERT INTO users (email,username,password,first_name,last_name,phone_number)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id,email,username,first_name,last_name`,
       [email, username, hash, first_name, last_name, phone]
     );
