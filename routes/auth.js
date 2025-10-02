@@ -31,7 +31,7 @@ function generateToken(user) {
   return jwt.sign(
     { id: user.id, email: user.email, username: user.username },
     JWT_SECRET,
-    { expiresIn: JWT_EXPIRES || '15m' }
+    { expiresIn: JWT_EXPIRES || '1h' }
   );
 }
 
@@ -133,7 +133,13 @@ router.post('/register', async (req, res) => {
     // ✅ CHANGE: Removed token from JSON response
     res.status(201).json({
       message: 'User registered',
-      user: { }
+      user: {
+        id: newUser.id,
+        email: newUser.email,
+        username: newUser.username,
+        first_name: newUser.first_name,
+        last_name: newUser.last_name
+      }
     });
   } catch (err) {
     console.error('❌ Register error:', err);
@@ -159,7 +165,19 @@ router.post('/reset-password', async (req, res) => {
 // Get Current User (protected)
 // -----------------------------
 router.get('/me', authenticate, async (req, res) => {
-  // unchanged...
+  try {
+    const result = await pool.query(
+      'SELECT id,email,username,first_name,last_name,phone_number FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json({ user: result.rows[0] });
+  } catch (err) {
+    console.error('❌ /me error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // -----------------------------
