@@ -12,6 +12,8 @@ import authRoutes from './routes/auth.js'; // Authentication routes
 import transferRoutes from './routes/transfers.js'; // Money transfer routes
 import cookieParser from 'cookie-parser';
 import { sanitizeInput, generalRateLimit } from './middleware/security.js'; // Add your security file
+import userRoutes from './routes/users.js';
+
 
 // -----------------------------
 // Load environment variables
@@ -76,6 +78,7 @@ app.use(cors({
 // -----------------------------
 app.use('/auth', authRoutes);        // Authentication endpoints
 app.use('/transfers', transferRoutes); // Money transfer endpoints
+app.use('/users', userRoutes);
 // Health check (useful for monitoring / Vercel probes)
 app.get('/health', async (req, res) => {
   try {

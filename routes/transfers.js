@@ -30,9 +30,11 @@ router.post('/send', authenticate, async (req, res) => {
     if (!amount || amount <= 0) {
       return res.status(400).json({ error: 'Invalid amount' });
     }
-
-    if (!recipientName || !recipientEmail) {
-      return res.status(400).json({ error: 'Recipient information required' });
+    if (!recipientName) {
+      return res.status(400).json({ error: 'Recipient name required' });
+    }
+    if (!recipientEmail && !recipientPhone) {
+      return res.status(400).json({ error: 'Recipient phone or email required' })
     }
 
     if (!fromCurrency || !toCurrency) {
@@ -45,12 +47,9 @@ router.post('/send', authenticate, async (req, res) => {
     const transferFee = (parseFloat(amount) * feePercentage) + flatFee;
     const totalAmount = parseFloat(amount) + transferFee;
 
-    // Exchange rate (CAD to KES - approximate)
-    const exchangeRate = 96.50; // Update with real-time rate in production
+    // Exchange rate (CAD to KES)
+    const exchangeRate = fromCurrency === 'CAD' ? 110.45 : 150.25; // Match frontend rates
     const recipientAmount = toCurrency === 'KES' ? amount * exchangeRate : amount;
-
-    // Check if this is a card-only transfer system (no balance needed)
-    // For card-based transfers, you would integrate with Stripe/Square here
 
     // Create transaction record
     const result = await pool.query(
@@ -86,16 +85,11 @@ router.post('/send', authenticate, async (req, res) => {
         exchangeRate,
         paymentMethod || 'card',
         notes || '',
-        'pending' // Status: pending, completed, failed
+        'completed'
       ]
     );
 
     const transaction = result.rows[0];
-
-    // TODO: In production, integrate payment processing here:
-    // - Stripe for card payments
-    // - Payment verification
-    // - Update status to 'completed' after successful payment
 
     res.status(201).json({
       message: 'Transfer initiated successfully',
@@ -113,13 +107,13 @@ router.post('/send', authenticate, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('❌ Transfer error:', err);
+    console.error('Transfer error:', err);
     res.status(500).json({ error: 'Transfer failed. Please try again.' });
   }
 });
 
 // -----------------------------
-// GET /transfers/history - Get user's transfer history
+// GET /transfers/history - Get user's sent transfers only
 // -----------------------------
 router.get('/history', authenticate, async (req, res) => {
   const userId = req.user.id;
@@ -128,38 +122,38 @@ router.get('/history', authenticate, async (req, res) => {
   try {
     let query = `
       SELECT 
-        id,
-        recipient_name,
-        recipient_email,
-        amount,
-        fee,
-        total_amount,
-        from_currency,
-        to_currency,
-        recipient_amount,
-        exchange_rate,
-        payment_method,
-        status,
-        created_at,
-        updated_at
-      FROM transactions 
-      WHERE sender_id = $1
+        t.id,
+        t.recipient_name,
+        t.recipient_email,
+        t.recipient_phone,
+        t.amount,
+        t.fee,
+        t.total_amount,
+        t.from_currency,
+        t.to_currency,
+        t.recipient_amount,
+        t.exchange_rate,
+        t.payment_method,
+        t.status,
+        t.notes,
+        t.created_at,
+        t.updated_at
+      FROM transactions t
+      WHERE t.sender_id = $1
     `;
     
     const params = [userId];
 
-    // Filter by status if provided
     if (status) {
-      query += ` AND status = $${params.length + 1}`;
+      query += ` AND t.status = $${params.length + 1}`;
       params.push(status);
     }
 
-    query += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    query += ` ORDER BY t.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limit, offset);
 
     const result = await pool.query(query, params);
 
-    // Get total count
     const countResult = await pool.query(
       'SELECT COUNT(*) FROM transactions WHERE sender_id = $1',
       [userId]
@@ -173,7 +167,7 @@ router.get('/history', authenticate, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('❌ Fetch history error:', err);
+    console.error('Fetch history error:', err);
     res.status(500).json({ error: 'Failed to fetch transfer history' });
   }
 });
@@ -199,7 +193,7 @@ router.get('/:id', authenticate, async (req, res) => {
     res.json({ transaction: result.rows[0] });
 
   } catch (err) {
-    console.error('❌ Fetch transfer error:', err);
+    console.error('Fetch transfer error:', err);
     res.status(500).json({ error: 'Failed to fetch transfer details' });
   }
 });
@@ -215,16 +209,16 @@ router.post('/calculate-fee', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'Invalid amount' });
     }
 
-    // Fee calculation: 2.5% + $2 flat fee
     const feePercentage = 0.025;
     const flatFee = 2.00;
     const transferFee = (parseFloat(amount) * feePercentage) + flatFee;
     const totalAmount = parseFloat(amount) + transferFee;
 
-    // Exchange rates (update with real-time rates in production)
     const exchangeRates = {
       'CAD-KES': 96.50,
-      'KES-CAD': 0.0104
+      'USD-KES': 130.00,
+      'KES-CAD': 0.0104,
+      'KES-USD': 0.0077
     };
 
     const rateKey = `${fromCurrency}-${toCurrency}`;
@@ -242,7 +236,7 @@ router.post('/calculate-fee', authenticate, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('❌ Calculate fee error:', err);
+    console.error('Calculate fee error:', err);
     res.status(500).json({ error: 'Failed to calculate fee' });
   }
 });
