@@ -50,7 +50,7 @@ app.use(generalRateLimit); // Protect against brute force
 const allowedOrigins = [
   'http://localhost:3000',              // Local dev frontend
   'https://localhost:3000',             // Secure local dev
-  /\.vercel\.app$/                      // Any deployed Vercel frontend
+  "https://hawalasend.netlify.app"                // Any deployed Vercel frontend
 ];
 
 app.use(cors({
