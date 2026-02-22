@@ -12,9 +12,9 @@
     "format": "prettier --write .",
     "security-check": "npm audit",
     "prod": "NODE_ENV=production node index.js"
-    
   },
   "dependencies": {
+    "@sendgrid/mail": "^8.1.6",
     "async-retry": "^1.3.3",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
