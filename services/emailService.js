@@ -1,5 +1,7 @@
 import nodemailer from 'nodemailer';
 
+console.log("EMAIL HOST:", process.env.EMAIL_HOST);
+
 // Create transporter with better error handling
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
