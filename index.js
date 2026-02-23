@@ -13,22 +13,26 @@ import transferRoutes from './routes/transfers.js'; // Money transfer routes
 import cookieParser from 'cookie-parser';
 import { sanitizeInput, generalRateLimit } from './middleware/security.js'; // Add your security file
 import userRoutes from './routes/users.js';
+import dotenv from 'dotenv';
 
 
 // -----------------------------
 // Load environment variables
-// -----------------------------
-config({ path: './.env' }); // Specify the .env file location
+// ----------------------------
+
+// Only load .env locally
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config();
+}
 
 // Ensure critical env variables exist
-  
 if (!process.env.JWT_SECRET || !process.env.DATABASE_URL) {
   throw new Error('❌ Missing critical environment variables: JWT_SECRET or DATABASE_URL');
 }
-console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-console.log(`📂 Loaded env file: ${process.env.NODE_ENV === 'production' ? '.env.production' : '.env'}`);
-console.log(`📋 Env check: JWT_SECRET=${!!process.env.JWT_SECRET}, DATABASE_URL=${!!process.env.DATABASE_URL}`);
 
+console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+console.log(`📋 Env check: JWT_SECRET=${!!process.env.JWT_SECRET}, DATABASE_URL=${!!process.env.DATABASE_URL}`);
+console.log(`📧 SendGrid Key Exists: ${!!process.env.SENDGRID_API_KEY}`);
 // -----------------------------
 // Initialize Express app
 // -----------------------------
